@@ -2,8 +2,8 @@
   "api_base": {{ simulation_environment_webots_api_base | to_json }},
   "access_token_file": {{ simulation_environment_webots_access_token_file | to_json }},
   "input_spike_threshold": {{ simulation_environment_webots_input_spike_threshold | float }},
-  "inference_interval_ms": 1000,
-  "output_hold_ms": 1500,
+  "inference_interval_ms": {{ simulation_environment_webots_inference_interval_ms | int }},
+  "output_hold_ms": {{ simulation_environment_webots_output_hold_ms | int }},
   "robots": {
 {% for robot_name, binding in (simulation_environment_webots_network_bindings | dictsort) %}
     {{ robot_name | to_json }}: {
