@@ -4,6 +4,7 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
 EXTERNPROTO "../protos/CelegansRobot.proto"
+EXTERNPROTO "../protos/HexapodRobot.proto"
 EXTERNPROTO "../protos/NmHabitatOrchard.proto"
 EXTERNPROTO "../protos/NmHabitatStream.proto"
 EXTERNPROTO "../protos/NmHabitatTerrain.proto"
@@ -255,18 +256,18 @@ Robot {
 CelegansRobot {
   translation -1.25 -1.75 0.0320
   rotation 1.000000 0.000000 0.000000 1.57080
-  name "AARNN_QC00"
+  name "AARNN_NETWORK_CELEGANS_01"
   controller "nm_api_robot_controller"
 }
 CelegansRobot {
   translation -0.42 -1.75 0.0320
   rotation 0.000000 0.707107 0.707107 3.14159
-  name "AARNN_QC01"
+  name "AARNN_NETWORK_CELEGANS_02"
   controller "nm_api_robot_controller"
 }
-CelegansRobot { translation 0.42 -1.75 0.032 rotation 0 0 1 3.14159 name "AARNN_QC02" controller "nm_api_robot_controller" }
-CelegansRobot { translation 1.25 -1.75 0.032 rotation 0 0 1 3.14159 name "AARNN_QC03" controller "nm_api_robot_controller" }
-CelegansRobot { translation -1.25 1.65 0.032 rotation 0 0 1 0 name "AARNN_QC04" controller "nm_api_robot_controller" }
-CelegansRobot { translation -0.42 1.65 0.032 rotation 0 0 1 0 name "AARNN_QC05" controller "nm_api_robot_controller" }
-CelegansRobot { translation 0.42 1.65 0.032 rotation 0 0 1 0 name "AARNN_SM00" controller "nm_api_robot_controller" }
-CelegansRobot { translation 1.25 1.65 0.032 rotation 0 0 1 0 name "AARNN_SM01" controller "nm_api_robot_controller" }
+HexapodRobot { translation 0.62 -1.75 0.190 rotation 0 0 1 3.14159 name "AARNN_NETWORK_HEXAPOD_01" controller "nm_api_robot_controller" }
+HexapodRobot { translation -1.05 1.55 0.190 rotation 0 0 1 0 name "AARNN_NETWORK_SHARED_SNN" controller "nm_api_robot_controller" }
+HexapodRobot { translation 0.10 1.55 0.190 rotation 0 0 1 0 name "AARNN_NETWORK_TENANT" controller "nm_api_robot_controller" }
+CelegansRobot { translation 1.15 1.55 0.032 rotation 0 0 1 0 name "AARNN_SLOT_06" controller "nm_api_robot_controller" }
+CelegansRobot { translation -0.55 2.45 0.032 rotation 0 0 1 0 name "AARNN_SLOT_07" controller "nm_api_robot_controller" }
+CelegansRobot { translation 0.55 2.45 0.032 rotation 0 0 1 0 name "AARNN_SLOT_08" controller "nm_api_robot_controller" }

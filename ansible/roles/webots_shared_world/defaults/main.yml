@@ -17,21 +17,23 @@ simulation_environment_webots_config_dir: /etc/neuralmimicry/webots
 simulation_environment_webots_fleet_config: "{{ simulation_environment_webots_config_dir }}/fleet.json"
 simulation_environment_webots_access_token_file: "{{ simulation_environment_webots_config_dir }}/aarnn_access_token"
 simulation_environment_webots_api_base: https://aarnn.neuralmimicry.ai/api
+simulation_environment_webots_input_spike_threshold: 0.5
 simulation_environment_webots_network_bindings:
-  AARNN_QC00: {}
-  AARNN_QC01: {}
-  AARNN_QC02: {}
-  AARNN_QC03: {}
-  AARNN_QC04: {}
-  AARNN_QC05: {}
-  AARNN_SM00: {}
-  AARNN_SM01: {}
+  AARNN_NETWORK_CELEGANS_01: {}
+  AARNN_NETWORK_CELEGANS_02: {}
+  AARNN_NETWORK_HEXAPOD_01: {}
+  AARNN_NETWORK_SHARED_SNN: {}
+  AARNN_NETWORK_TENANT: {}
+  AARNN_SLOT_06: {}
+  AARNN_SLOT_07: {}
+  AARNN_SLOT_08: {}
 simulation_environment_webots_access_token_file_source: "{{ lookup('env', 'AARNN_WEBOTS_ACCESS_TOKEN_FILE') | default('', true) }}"
 simulation_environment_webots_access_token: >-
   {{
     lookup('env', 'AARNN_WEBOTS_ACCESS_TOKEN')
     | default(
         lookup('file', simulation_environment_webots_access_token_file_source, errors='ignore')
+        | default('', true)
         if (simulation_environment_webots_access_token_file_source | string | length > 0)
         else '',
         true

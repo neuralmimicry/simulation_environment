@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -66,12 +67,17 @@ size_t append_response(char *data, size_t size, size_t count, void *opaque) {
 class InferenceWorker {
  public:
   InferenceWorker(std::string endpoint, std::string token, std::string network_id,
-                  std::string node_id, json spike_io)
+                  std::string node_id, std::string robot_name,
+                  std::size_t actuator_count, float input_spike_threshold)
       : endpoint_(std::move(endpoint)),
         token_(std::move(token)),
         network_id_(std::move(network_id)),
         node_id_(std::move(node_id)),
-        spike_io_(std::move(spike_io)),
+        robot_name_(std::move(robot_name)),
+        actuator_count_(actuator_count),
+        input_spike_threshold_(std::isfinite(input_spike_threshold)
+                                   ? std::clamp(input_spike_threshold, 0.0f, 1.0f)
+                                   : 0.5f),
         thread_([this] { run(); }) {}
 
   ~InferenceWorker() { stop(); }
@@ -85,9 +91,13 @@ class InferenceWorker {
     condition_.notify_one();
   }
 
-  std::vector<std::uint32_t> outputs() const {
+  bool take_outputs(std::vector<std::uint32_t> &outputs) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return outputs_;
+    if (!outputs_pending_)
+      return false;
+    outputs = std::move(outputs_);
+    outputs_pending_ = false;
+    return true;
   }
 
   void stop() {
@@ -105,13 +115,16 @@ class InferenceWorker {
   std::string token_;
   std::string network_id_;
   std::string node_id_;
-  json spike_io_;
+  std::string robot_name_;
+  std::size_t actuator_count_;
+  float input_spike_threshold_;
   mutable std::mutex mutex_;
   std::condition_variable condition_;
   Frame pending_;
   bool has_pending_ = false;
   bool stopping_ = false;
   std::vector<std::uint32_t> outputs_;
+  bool outputs_pending_ = false;
   std::thread thread_;
 
   bool infer(const Frame &frame, std::vector<std::uint32_t> &result) {
@@ -119,16 +132,22 @@ class InferenceWorker {
     if (!curl)
       return false;
 
+    std::vector<std::uint32_t> input_spike_indices;
+    input_spike_indices.reserve(frame.values.size());
+    for (std::size_t i = 0; i < frame.values.size(); ++i) {
+      const float value = frame.values[i];
+      if (std::isfinite(value) && value >= input_spike_threshold_)
+        input_spike_indices.push_back(static_cast<std::uint32_t>(i));
+    }
+
     json request = {{"network_id", network_id_},
                     {"step_index", frame.step},
                     {"time_ms", frame.time_ms},
                     {"dt_ms", frame.dt_ms},
                     {"aer_base", 0},
-                    {"input_values", frame.values}};
+                    {"spike_indices", input_spike_indices}};
     if (!node_id_.empty())
       request["node_id"] = node_id_;
-    if (!spike_io_.is_null())
-      request["spike_io"] = spike_io_;
     const std::string body = request.dump();
     std::string response;
     struct curl_slist *headers = nullptr;
@@ -143,7 +162,7 @@ class InferenceWorker {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_response);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 8000L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 20000L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     const CURLcode code = curl_easy_perform(curl);
     long status = 0;
@@ -151,9 +170,16 @@ class InferenceWorker {
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
     if (code != CURLE_OK || status < 200 || status >= 300) {
-      std::cerr << "[nm_api_robot] infer request failed: "
-                << (code == CURLE_OK ? "HTTP " + std::to_string(status) : curl_easy_strerror(code))
-                << "\n";
+      constexpr std::size_t max_error_body = 512;
+      const bool body_truncated = response.size() > max_error_body;
+      if (body_truncated)
+        response.resize(max_error_body);
+      std::cerr << "[nm_api_robot] infer request failed robot=" << robot_name_
+                << " network=" << network_id_ << " step=" << frame.step << " reason="
+                << (code == CURLE_OK ? "HTTP " + std::to_string(status) : curl_easy_strerror(code));
+      if (!response.empty())
+        std::cerr << " response=" << response << (body_truncated ? "...[truncated]" : "");
+      std::cerr << std::endl;
       return false;
     }
 
@@ -162,17 +188,25 @@ class InferenceWorker {
       result = parsed.value("output_spike_indices", std::vector<std::uint32_t>{});
       return true;
     } catch (const std::exception &error) {
-      std::cerr << "[nm_api_robot] invalid infer response: " << error.what() << "\n";
+      std::cerr << "[nm_api_robot] invalid infer response robot=" << robot_name_
+                << " network=" << network_id_ << " step=" << frame.step
+                << " reason=" << error.what() << "\n";
       return false;
     }
   }
 
   void run() {
+    std::uint64_t successful_frames = 0;
+    std::uint32_t consecutive_failures = 0;
+    auto retry_after = std::chrono::steady_clock::time_point::min();
+    auto next_status_log = std::chrono::steady_clock::now();
     while (true) {
       Frame frame;
       {
         std::unique_lock<std::mutex> lock(mutex_);
         condition_.wait(lock, [this] { return stopping_ || has_pending_; });
+        if (retry_after > std::chrono::steady_clock::now())
+          condition_.wait_until(lock, retry_after, [this] { return stopping_; });
         if (stopping_)
           return;
         frame = std::move(pending_);
@@ -180,8 +214,41 @@ class InferenceWorker {
       }
       std::vector<std::uint32_t> next_outputs;
       if (infer(frame, next_outputs)) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        outputs_ = std::move(next_outputs);
+        const auto mapped_outputs = static_cast<std::size_t>(std::count_if(
+            next_outputs.begin(), next_outputs.end(),
+            [this](std::uint32_t index) { return index < actuator_count_; }));
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          outputs_ = next_outputs;
+          outputs_pending_ = true;
+        }
+        ++successful_frames;
+        const auto now = std::chrono::steady_clock::now();
+        if (successful_frames == 1 || now >= next_status_log) {
+          std::cout << "[nm_api_robot] inference ok robot=" << robot_name_
+                    << " network=" << network_id_
+                    << " successful_frames=" << successful_frames
+                    << " step=" << frame.step
+                    << " input_spikes=" << std::count_if(
+                           frame.values.begin(), frame.values.end(),
+                           [this](float value) {
+                             return std::isfinite(value) && value >= input_spike_threshold_;
+                           })
+                    << " output_spikes=" << next_outputs.size()
+                    << " mapped_actuators=" << mapped_outputs << std::endl;
+          next_status_log = now + std::chrono::seconds(30);
+        }
+        consecutive_failures = 0;
+        retry_after = std::chrono::steady_clock::time_point::min();
+      } else {
+        ++consecutive_failures;
+        const auto exponent = std::min<std::uint32_t>(consecutive_failures - 1, 6);
+        const auto delay = std::min(std::chrono::milliseconds(30000),
+                                    std::chrono::milliseconds(500 * (1u << exponent)));
+        retry_after = std::chrono::steady_clock::now() + delay;
+        std::cerr << "[nm_api_robot] retry scheduled robot=" << robot_name_
+                  << " network=" << network_id_ << " delay_ms=" << delay.count()
+                  << " consecutive_failures=" << consecutive_failures << std::endl;
       }
     }
   }
@@ -254,7 +321,9 @@ int main() {
       }
       curl_global_init(CURL_GLOBAL_DEFAULT);
       worker = std::make_unique<InferenceWorker>(api_base + "/aer/infer", token, binding.network_id,
-                                                 binding.node_id, config.value("spike_io", json{}));
+                                                 binding.node_id, robot_name,
+                                                 actuator_indices.size(),
+                                                 config.value("input_spike_threshold", 0.5f));
       std::cout << "[nm_api_robot] connected robot=" << robot_name << " network=" << binding.network_id
                 << " sensors=" << sensor_indices.size() << " actuators=" << actuator_indices.size() << "\n";
     } else {
@@ -267,9 +336,9 @@ int main() {
   }
 
   const auto interval = std::chrono::milliseconds(
-      std::max(20, config.value("inference_interval_ms", 200)));
+      std::max(20, config.value("inference_interval_ms", 1000)));
   const auto output_hold = std::chrono::milliseconds(
-      std::max(20, config.value("output_hold_ms", 350)));
+      std::max(20, config.value("output_hold_ms", 1500)));
   auto next_inference = std::chrono::steady_clock::now();
   std::vector<float> all_sensors(static_cast<std::size_t>(mapper.get_sensory_size()));
   std::vector<float> all_actuators(static_cast<std::size_t>(mapper.get_output_size()), 0.5f);
@@ -293,10 +362,11 @@ int main() {
         next_inference = now + interval;
       }
 
-      const auto outputs = worker->outputs();
-      for (std::uint32_t index : outputs)
-        if (index < output_until.size())
-          output_until[index] = now + output_hold;
+      std::vector<std::uint32_t> outputs;
+      if (worker->take_outputs(outputs))
+        for (std::uint32_t index : outputs)
+          if (index < output_until.size())
+            output_until[index] = now + output_hold;
       std::fill(all_actuators.begin(), all_actuators.end(), 0.5f);
       for (std::size_t i = 0; i < actuator_indices.size(); ++i)
         if (output_until[i] > now)

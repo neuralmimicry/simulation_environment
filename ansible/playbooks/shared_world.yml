@@ -2,5 +2,7 @@
 - name: Install the persistent NeuralMimicry Webots fleet world
   hosts: webots_fleet
   become: true
+  vars_files:
+    - ../vars/neuralmimicry-site.yml
   roles:
     - webots_shared_world

@@ -14,6 +14,11 @@ Environment=HOME={{ simulation_environment_webots_home }}
 Environment=WEBOTS_HOME={{ simulation_environment_webots_home_dir }}
 Environment=NM_WEBOTS_FLEET_CONFIG={{ simulation_environment_webots_fleet_config }}
 Environment=NM_WEBOTS_RUNTIME_WORLD_FILE={{ simulation_environment_webots_state_world }}
+# The shared Hexapod profile assigns one event-on and one event-off input to
+# its camera, so sample a single retina cell instead of DeviceMapper's 160x120
+# default. Other robots do not have this camera.
+Environment=NM_CAMERA_RETINA_WIDTH_HEX_S_26_HEAD_CAMERA=1
+Environment=NM_CAMERA_RETINA_HEIGHT_HEX_S_26_HEAD_CAMERA=1
 EnvironmentFile=-/etc/default/nm-webots-shared-world
 Environment=__GLX_VENDOR_LIBRARY_NAME={{ simulation_environment_webots_open_gl_vendor }}
 ExecStart={{ simulation_environment_webots_runtime_script }}

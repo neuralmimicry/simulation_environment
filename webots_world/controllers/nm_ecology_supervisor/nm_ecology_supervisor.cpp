@@ -76,6 +76,30 @@ bool save_snapshot(Supervisor &supervisor, const std::filesystem::path &target) 
     std::cerr << "[nm_ecology] cannot publish world snapshot: " << error.message() << '\n';
     return false;
   }
+  const char *revision = std::getenv("NM_WEBOTS_SOURCE_REVISION");
+  if (revision && *revision) {
+    const auto revision_path = std::filesystem::path(target.string() + ".source-revision");
+    const auto revision_temporary = std::filesystem::path(revision_path.string() + ".pending");
+    {
+      std::ofstream output(revision_temporary, std::ios::trunc);
+      if (!output) {
+        std::cerr << "[nm_ecology] cannot stage source revision marker\n";
+      } else {
+        output << revision << '\n';
+        output.flush();
+        if (output) {
+          std::filesystem::rename(revision_temporary, revision_path, error);
+        } else {
+          error = std::make_error_code(std::errc::io_error);
+        }
+      }
+    }
+    if (error) {
+      std::filesystem::remove(revision_temporary);
+      std::cerr << "[nm_ecology] cannot publish source revision marker: " << error.message() << '\n';
+      error.clear();
+    }
+  }
   std::cout << "[nm_ecology] saved persistent world state at " << target << '\n';
   return true;
 }

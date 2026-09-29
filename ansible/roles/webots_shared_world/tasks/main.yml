@@ -53,12 +53,24 @@
     simulation_environment_webots_bindings_requested: >-
       {{ (simulation_environment_webots_network_bindings | dict2items | selectattr('value.network_id', 'defined') | map(attribute='value.network_id') | map('string') | map('trim') | reject('equalto', '') | list | length) > 0 }}
 
-- name: Require the AARNN service token when network bindings are configured
+- name: Check for an already-installed AARNN service token
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_access_token_file }}"
+  register: simulation_environment_webots_existing_token
+  no_log: true
+
+- name: Require a supplied or already-installed AARNN service token
   no_log: true
   ansible.builtin.assert:
     that:
-      - not (simulation_environment_webots_bindings_requested | bool) or (simulation_environment_webots_access_token | trim | length > 0)
-    fail_msg: "The configured fleet network IDs require AARNN_WEBOTS_ACCESS_TOKEN with aarnn:use permission."
+      - >-
+        not (simulation_environment_webots_bindings_requested | bool)
+        or (simulation_environment_webots_access_token | trim | length >= 32)
+        or (
+          simulation_environment_webots_existing_token.stat.exists
+          and (simulation_environment_webots_existing_token.stat.size | default(0) | int) >= 32
+        )
+    fail_msg: "Configured fleet networks require a supplied AARNN service token or an existing token file of at least 32 bytes."
 
 - name: Require all eight network bindings when strict binding mode is enabled
   ansible.builtin.assert:
@@ -269,6 +281,7 @@
     group: "{{ simulation_environment_webots_service_user }}"
     mode: "0600"
   notify: Reload systemd and restart the shared Webots world
+  when: simulation_environment_webots_access_token | trim | length > 0
 
 - name: Install the persistent Webots world start script
   ansible.builtin.copy:
