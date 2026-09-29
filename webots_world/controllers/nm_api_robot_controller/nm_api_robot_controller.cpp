@@ -192,6 +192,8 @@ class InferenceWorker {
                     {"dt_ms", frame.dt_ms},
                     {"aer_base", 0},
                     {"spike_indices", input_spike_indices}};
+    if (!activity_addr_.empty())
+      request["addr"] = activity_addr_;
     const std::string body = request.dump();
     request_ms = 0.0;
     new_connections = 0;
