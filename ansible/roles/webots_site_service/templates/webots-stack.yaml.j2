@@ -220,11 +220,11 @@ metadata:
   name: {{ continuum_tenant_webots_stream_ingress_name }}
   namespace: {{ continuum_tenant_webots_namespace }}
   annotations:
-    nginx.ingress.kubernetes.io/auth-url: {{ continuum_tenant_webots_stream_auth_url | quote }}
+    nginx.ingress.kubernetes.io/auth-url: {{ continuum_tenant_webots_stream_auth_url | string | to_json }}
     nginx.ingress.kubernetes.io/auth-method: "GET"
     nginx.ingress.kubernetes.io/auth-response-headers: ""
-    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ continuum_tenant_webots_stream_proxy_timeout | quote }}
-    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ continuum_tenant_webots_stream_proxy_timeout | quote }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ continuum_tenant_webots_stream_proxy_timeout | string | to_json }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ continuum_tenant_webots_stream_proxy_timeout | string | to_json }}
     nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/rewrite-target: "/"
