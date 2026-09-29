@@ -127,11 +127,9 @@ class InferenceWorker {
   bool outputs_pending_ = false;
   std::thread thread_;
 
-  bool infer(const Frame &frame, std::vector<std::uint32_t> &result) {
-    CURL *curl = curl_easy_init();
-    if (!curl)
-      return false;
-
+  bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result) {
+    // Reuse this worker's easy handle and connection cache. Rebuilding the
+    // handle for each frame forced a fresh TLS connection on every inference.
     std::vector<std::uint32_t> input_spike_indices;
     input_spike_indices.reserve(frame.values.size());
     for (std::size_t i = 0; i < frame.values.size(); ++i) {
@@ -167,8 +165,10 @@ class InferenceWorker {
     const CURLcode code = curl_easy_perform(curl);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    // Clear borrowed request pointers before their backing strings and header
+    // list go out of scope. curl_easy_reset preserves the live connection cache.
+    curl_easy_reset(curl);
     curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     if (code != CURLE_OK || status < 200 || status >= 300) {
       constexpr std::size_t max_error_body = 512;
       const bool body_truncated = response.size() > max_error_body;
@@ -196,6 +196,13 @@ class InferenceWorker {
   }
 
   void run() {
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+      std::cerr << "[nm_api_robot] cannot create HTTP client robot=" << robot_name_
+                << " network=" << network_id_ << std::endl;
+      return;
+    }
+
     std::uint64_t successful_frames = 0;
     std::uint32_t consecutive_failures = 0;
     auto retry_after = std::chrono::steady_clock::time_point::min();
@@ -208,12 +215,12 @@ class InferenceWorker {
         if (retry_after > std::chrono::steady_clock::now())
           condition_.wait_until(lock, retry_after, [this] { return stopping_; });
         if (stopping_)
-          return;
+          break;
         frame = std::move(pending_);
         has_pending_ = false;
       }
       std::vector<std::uint32_t> next_outputs;
-      if (infer(frame, next_outputs)) {
+      if (infer(curl, frame, next_outputs)) {
         const auto mapped_outputs = static_cast<std::size_t>(std::count_if(
             next_outputs.begin(), next_outputs.end(),
             [this](std::uint32_t index) { return index < actuator_count_; }));
@@ -251,6 +258,7 @@ class InferenceWorker {
                   << " consecutive_failures=" << consecutive_failures << std::endl;
       }
     }
+    curl_easy_cleanup(curl);
   }
 };
 
