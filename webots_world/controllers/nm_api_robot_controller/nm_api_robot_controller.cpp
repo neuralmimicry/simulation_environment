@@ -30,7 +30,6 @@ using webots::Robot;
 namespace {
 struct Binding {
   std::string network_id;
-  std::string node_id;
   std::regex sensor_pattern;
   std::regex actuator_pattern;
   std::size_t expected_sensory = 0;
@@ -42,6 +41,14 @@ struct Frame {
   double time_ms = 0.0;
   double dt_ms = 0.0;
   std::vector<float> values;
+};
+
+struct HttpResult {
+  CURLcode code = CURLE_OK;
+  long status = 0;
+  double total_time_seconds = 0.0;
+  long new_connections = 0;
+  std::string body;
 };
 
 std::string read_file(const std::string &path) {
@@ -64,15 +71,52 @@ size_t append_response(char *data, size_t size, size_t count, void *opaque) {
   return bytes;
 }
 
+HttpResult perform_http(CURL *curl, const std::string &url,
+                        const std::string &token,
+                        const std::string *post_body = nullptr) {
+  curl_easy_reset(curl);
+  HttpResult result;
+  struct curl_slist *headers = nullptr;
+  headers = curl_slist_append(headers, "Accept: application/json");
+  if (post_body)
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+  const std::string authorization = "Authorization: Bearer " + token;
+  headers = curl_slist_append(headers, authorization.c_str());
+
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_response);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  if (post_body) {
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_body->c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(post_body->size()));
+  } else {
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+  }
+
+  result.code = curl_easy_perform(curl);
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.status);
+  curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &result.total_time_seconds);
+  curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &result.new_connections);
+  // Reset borrowed request pointers but preserve libcurl's live connection cache.
+  curl_easy_reset(curl);
+  curl_slist_free_all(headers);
+  return result;
+}
+
 class InferenceWorker {
  public:
-  InferenceWorker(std::string endpoint, std::string token, std::string network_id,
-                  std::string node_id, std::string robot_name,
+  InferenceWorker(std::string api_base, std::string activity_addr,
+                  std::string token, std::string network_id, std::string robot_name,
                   std::size_t actuator_count, float input_spike_threshold)
-      : endpoint_(std::move(endpoint)),
+      : api_base_(std::move(api_base)),
+        activity_addr_(std::move(activity_addr)),
         token_(std::move(token)),
         network_id_(std::move(network_id)),
-        node_id_(std::move(node_id)),
         robot_name_(std::move(robot_name)),
         actuator_count_(actuator_count),
         input_spike_threshold_(std::isfinite(input_spike_threshold)
@@ -111,13 +155,15 @@ class InferenceWorker {
   }
 
  private:
-  std::string endpoint_;
+  std::string api_base_;
+  std::string activity_addr_;
   std::string token_;
   std::string network_id_;
-  std::string node_id_;
   std::string robot_name_;
   std::size_t actuator_count_;
   float input_spike_threshold_;
+  std::uint64_t last_activity_step_ = 0;
+  bool has_last_activity_step_ = false;
   mutable std::mutex mutex_;
   std::condition_variable condition_;
   Frame pending_;
@@ -129,8 +175,9 @@ class InferenceWorker {
 
   bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result,
              double &request_ms, long &new_connections) {
-    // Reuse this worker's easy handle and connection cache. Rebuilding the
-    // handle for each frame forced a fresh TLS connection on every inference.
+    // Inject sensory spikes without asking the orchestrator to rediscover the
+    // active node, then read current activity through a direct cluster node.
+    // /api/aer/infer repeats discovery and can wait five seconds for output.
     std::vector<std::uint32_t> input_spike_indices;
     input_spike_indices.reserve(frame.values.size());
     for (std::size_t i = 0; i < frame.values.size(); ++i) {
@@ -145,58 +192,106 @@ class InferenceWorker {
                     {"dt_ms", frame.dt_ms},
                     {"aer_base", 0},
                     {"spike_indices", input_spike_indices}};
-    if (!node_id_.empty())
-      request["node_id"] = node_id_;
     const std::string body = request.dump();
-    std::string response;
-    struct curl_slist *headers = nullptr;
-    const std::string authorization = "Authorization: Bearer " + token_;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, authorization.c_str());
-    curl_easy_setopt(curl, CURLOPT_URL, endpoint_.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_response);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1500L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 20000L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    const CURLcode code = curl_easy_perform(curl);
-    long status = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    double total_time_seconds = 0.0;
-    curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &total_time_seconds);
-    request_ms = total_time_seconds * 1000.0;
+    request_ms = 0.0;
     new_connections = 0;
-    curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &new_connections);
-    // Clear borrowed request pointers before their backing strings and header
-    // list go out of scope. curl_easy_reset preserves the live connection cache.
-    curl_easy_reset(curl);
-    curl_slist_free_all(headers);
-    if (code != CURLE_OK || status < 200 || status >= 300) {
+    auto account_request = [&](const HttpResult &http) {
+      request_ms += http.total_time_seconds * 1000.0;
+      new_connections += http.new_connections;
+    };
+    auto log_http_failure = [&](const char *stage, const HttpResult &http) {
       constexpr std::size_t max_error_body = 512;
+      std::string response = http.body;
       const bool body_truncated = response.size() > max_error_body;
       if (body_truncated)
         response.resize(max_error_body);
-      std::cerr << "[nm_api_robot] infer request failed robot=" << robot_name_
+      std::cerr << "[nm_api_robot] " << stage << " request failed robot=" << robot_name_
                 << " network=" << network_id_ << " step=" << frame.step << " reason="
-                << (code == CURLE_OK ? "HTTP " + std::to_string(status) : curl_easy_strerror(code))
+                << (http.code == CURLE_OK ? "HTTP " + std::to_string(http.status)
+                                          : curl_easy_strerror(http.code))
                 << " request_ms=" << static_cast<long>(request_ms)
                 << " new_connections=" << new_connections;
       if (!response.empty())
         std::cerr << " response=" << response << (body_truncated ? "...[truncated]" : "");
       std::cerr << std::endl;
+    };
+
+    const HttpResult injection = perform_http(curl, api_base_ + "/aer/inject", token_, &body);
+    account_request(injection);
+    if (injection.code != CURLE_OK || injection.status < 200 || injection.status >= 300) {
+      log_http_failure("inject", injection);
+      return false;
+    }
+
+    char *escaped_network = curl_easy_escape(
+        curl, network_id_.c_str(), static_cast<int>(network_id_.size()));
+    if (!escaped_network) {
+      std::cerr << "[nm_api_robot] cannot encode activity query robot=" << robot_name_
+                << " network=" << network_id_ << std::endl;
+      return false;
+    }
+    const std::string network_query = escaped_network;
+    curl_free(escaped_network);
+    std::string activity_url = api_base_ + "/activity?network_id=" + network_query;
+    if (!activity_addr_.empty()) {
+      char *escaped_addr = curl_easy_escape(
+          curl, activity_addr_.c_str(), static_cast<int>(activity_addr_.size()));
+      if (!escaped_addr) {
+        std::cerr << "[nm_api_robot] cannot encode activity address robot=" << robot_name_
+                  << " network=" << network_id_ << std::endl;
+        return false;
+      }
+      activity_url += "&addr=";
+      activity_url += escaped_addr;
+      curl_free(escaped_addr);
+    }
+
+    HttpResult activity = perform_http(curl, activity_url, token_);
+    account_request(activity);
+    if ((activity.code != CURLE_OK || activity.status >= 500) && !activity_addr_.empty()) {
+      // The cached direct node may be offline. Let the API's normal cluster
+      // discovery select a replacement, then follow its returned source.
+      const std::string fallback_url = api_base_ + "/activity?network_id=" + network_query;
+      activity = perform_http(curl, fallback_url, token_);
+      account_request(activity);
+    }
+    if (activity.code != CURLE_OK || activity.status < 200 || activity.status >= 300) {
+      log_http_failure("activity", activity);
       return false;
     }
 
     try {
-      const auto parsed = json::parse(response);
-      result = parsed.value("output_spike_indices", std::vector<std::uint32_t>{});
+      const auto parsed = json::parse(activity.body);
+      const std::uint64_t sim_step = parsed.value("sim_step", std::uint64_t{0});
+      const bool step_reset = has_last_activity_step_ && sim_step < last_activity_step_;
+      const std::uint64_t previous_step = step_reset ? 0 : last_activity_step_;
+      if (!has_last_activity_step_ || step_reset || sim_step > previous_step) {
+        const auto output = parsed.value("output", json::object());
+        if (output.is_object())
+          result = output.value("indices", std::vector<std::uint32_t>{});
+        if (result.empty()) {
+          const auto history = parsed.value("output_history", json::array());
+          if (history.is_array()) {
+            for (const auto &entry : history) {
+              if (!entry.is_object() || entry.value("step", std::uint64_t{0}) <= previous_step)
+                continue;
+              const auto indices = entry.value("indices", std::vector<std::uint32_t>{});
+              if (!indices.empty()) {
+                result = indices;
+                break;
+              }
+            }
+          }
+        }
+      }
+      last_activity_step_ = sim_step;
+      has_last_activity_step_ = true;
+      const std::string source = parsed.value("source", std::string{});
+      if (!source.empty())
+        activity_addr_ = source;
       return true;
     } catch (const std::exception &error) {
-      std::cerr << "[nm_api_robot] invalid infer response robot=" << robot_name_
+      std::cerr << "[nm_api_robot] invalid activity response robot=" << robot_name_
                 << " network=" << network_id_ << " step=" << frame.step
                 << " reason=" << error.what() << "\n";
       return false;
@@ -283,7 +378,6 @@ Binding load_binding(const json &config, const std::string &robot_name) {
   const std::string sensor_regex = entry.value("sensor_regex", "^celegans_s_.*$");
   const std::string actuator_regex = entry.value("actuator_regex", "^celegans_o_.*$");
   return {entry.value("network_id", ""),
-          entry.value("node_id", ""),
           std::regex(sensor_regex),
           std::regex(actuator_regex),
           entry.value("expected_sensory", std::size_t{0}),
@@ -331,6 +425,7 @@ int main() {
         actuator_indices.push_back(static_cast<int>(i));
 
     const std::string api_base = config.value("api_base", "https://aarnn.neuralmimicry.ai/api");
+    const std::string activity_addr = config.value("activity_addr", "");
     const std::string token_file = config.value("access_token_file", "");
     std::string token = read_file(token_file);
     token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char c) { return std::isspace(c); }), token.end());
@@ -340,8 +435,8 @@ int main() {
         throw std::runtime_error("Webots device alignment differs from the configured AARNN profile");
       }
       curl_global_init(CURL_GLOBAL_DEFAULT);
-      worker = std::make_unique<InferenceWorker>(api_base + "/aer/infer", token, binding.network_id,
-                                                 binding.node_id, robot_name,
+      worker = std::make_unique<InferenceWorker>(api_base, activity_addr, token,
+                                                 binding.network_id, robot_name,
                                                  actuator_indices.size(),
                                                  config.value("input_spike_threshold", 0.5f));
       std::cout << "[nm_api_robot] connected robot=" << robot_name << " network=" << binding.network_id

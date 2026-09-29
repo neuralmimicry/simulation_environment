@@ -17,6 +17,7 @@ simulation_environment_webots_config_dir: /etc/neuralmimicry/webots
 simulation_environment_webots_fleet_config: "{{ simulation_environment_webots_config_dir }}/fleet.json"
 simulation_environment_webots_access_token_file: "{{ simulation_environment_webots_config_dir }}/aarnn_access_token"
 simulation_environment_webots_api_base: https://aarnn.neuralmimicry.ai/api
+simulation_environment_webots_activity_addr: ""
 simulation_environment_webots_input_spike_threshold: 0.5
 simulation_environment_webots_inference_interval_ms: 100
 simulation_environment_webots_output_hold_ms: 1500

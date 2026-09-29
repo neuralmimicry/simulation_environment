@@ -71,3 +71,8 @@ simulation_environment_webots_network_bindings:
     actuator_regex: '^hex_o_(00[0-9]|01[0-5])_.*$'
     expected_sensory: 32
     expected_outputs: 16
+
+# The infer endpoint performs cluster discovery and waits up to five seconds
+# for a fresh output on every frame. Query activity through an active worker
+# to avoid that orchestrator discovery round trip for the persistent world.
+simulation_environment_webots_activity_addr: "192.168.1.62:50051"

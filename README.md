@@ -44,6 +44,12 @@ bridge converts normalized sensor readings to raw AER spike indices locally,
 using the configurable `simulation_environment_webots_input_spike_threshold`
 (default `0.5`). This avoids downloading full AARNN snapshots just to encode
 each frame, which can exceed the API's 64 MiB shard snapshot limit.
+The bridge sends frames through `/api/aer/inject` and reads motor activity from
+`/api/activity`, using `simulation_environment_webots_activity_addr` to query
+through an active cluster node. If that node is unavailable, it falls back to
+the API's normal cluster discovery and follows the returned activity source.
+This avoids the orchestrator discovery and output-wait path used by
+`/api/aer/infer` on every Webots frame.
 The role checks that bound deployments have a token and installs it with
 owner-only permissions on both fleet hosts. Keep token values out of version
 control.
