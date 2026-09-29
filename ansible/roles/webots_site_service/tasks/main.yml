@@ -286,16 +286,16 @@
       when: continuum_tenant_webots_source_required | bool
       ansible.builtin.set_fact:
         continuum_tenant_webots_required_files:
-          - "{{ continuum_tenant_webots_repo_dir }}/Dockerfile"
           - "{{ continuum_tenant_webots_repo_dir }}/README.md"
-          - "{{ continuum_tenant_webots_repo_dir }}/webots.yaml"
           - "{{ continuum_tenant_webots_repo_dir }}/webots_service/Containerfile"
           - "{{ continuum_tenant_webots_repo_dir }}/webots_service/app.py"
           - "{{ continuum_tenant_webots_repo_dir }}/webots_service/default_catalog.json"
           - "{{ continuum_tenant_webots_repo_dir }}/webots_service/requirements.txt"
-          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/worlds/celegans_neuroworld.wbt"
-          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/worlds/drosophila_neuroworld.wbt"
-          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/worlds/neuroworld.wbt"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/worlds/shared_fleet_neuroworld.wbt"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/protos/CelegansRobot.proto"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/protos/NmHabitatAgar.proto"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/protos/NmHabitatOrchard.proto"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/protos/NmHabitatStream.proto"
 
     - name: Check required Webots packaging files
       when: continuum_tenant_webots_source_required | bool
