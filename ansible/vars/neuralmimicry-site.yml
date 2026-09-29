@@ -1,0 +1,35 @@
+---
+# Site deployment profile for neuralmimicry.ai. Kept with the Webots
+# implementation so a normal Ansible deployment selects the persistent
+# shared fleet world and links back to this repository.
+continuum_tenant_webots_client_user: "pbisaacs"
+continuum_tenant_webots_image: "ghcr.io/neuralmimicry/webots:latest"
+continuum_tenant_webots_build_image: true
+continuum_tenant_webots_use_local_dev_source: true
+simulation_environment_webots_access_token_file_source: >-
+  {{
+    lookup('env', 'AARNN_WEBOTS_ACCESS_TOKEN_FILE')
+    | default(playbook_dir ~ '/.secrets/customers/spirit/aarnn_access_token', true)
+  }}
+continuum_tenant_webots_registry_secret_enable: true
+continuum_tenant_webots_registry_secret_source_namespaces:
+  - "aarnn"
+  - "nmchain"
+  - "refiner"
+continuum_tenant_webots_dns_target_ip: "{{ hostvars['vega'].ansible_host | default('192.168.1.1') }}"
+continuum_tenant_webots_dns_server: "vega"
+continuum_tenant_webots_dns_servers:
+  - "vega"
+continuum_tenant_webots_ingress_ssl_redirect: false
+continuum_tenant_webots_ingress_force_ssl_redirect: false
+continuum_tenant_webots_enable_tls: false
+continuum_tenant_webots_aarnn_app_base: "https://aarnn.neuralmimicry.ai"
+continuum_tenant_webots_central_auth_api_base: "{{ continuum_shared_auth_api_internal_base_url }}"
+continuum_tenant_webots_cookie_domain: ".neuralmimicry.ai"
+continuum_tenant_webots_secure_cookies: true
+continuum_tenant_webots_world_source_base_url: "https://github.com/neuralmimicry/simulation_environment/blob/main"
+continuum_tenant_webots_cloud_run_base_url: ""
+continuum_tenant_webots_default_world: "shared-fleet"
+continuum_tenant_webots_replicas: 2
+continuum_tenant_webots_hpa_min_replicas: 2
+continuum_tenant_webots_hpa_max_replicas: 8

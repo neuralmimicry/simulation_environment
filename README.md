@@ -26,11 +26,12 @@ to the cluster ingress networks. Sign in at
 
 Robot slots default to unbound so the world can be inspected before selecting
 networks. To drive them from AARNN, set
-`AARNN_WEBOTS_ACCESS_TOKEN` to a service token with `aarnn:use` and override
+`AARNN_WEBOTS_ACCESS_TOKEN` or point `AARNN_WEBOTS_ACCESS_TOKEN_FILE` at a
+controller-local secret file containing a service token with `aarnn:use`, then override
 `simulation_environment_webots_network_bindings` with a `network_id` for each
 robot key (`AARNN_QC00` through `AARNN_QC05`, `AARNN_SM00`, and `AARNN_SM01`).
-The role checks that bound deployments have a token. Keep token values out of
-version control.
+The role checks that bound deployments have a token and installs it with
+owner-only permissions on `sm00`. Keep token values out of version control.
 
 The authenticated browser broker, world catalogue, robot bindings, controllers,
 and Ansible runtime installation all live in this repository. The website's
