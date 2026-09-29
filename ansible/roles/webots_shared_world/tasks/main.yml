@@ -201,7 +201,12 @@
       - "--exclude=webots_world/controllers/*/nm_ecology_supervisor"
   register: simulation_environment_webots_sync
   changed_when: >-
-    simulation_environment_webots_sync.stdout_lines | default([]) | length > 0
+    (
+      simulation_environment_webots_sync.stdout_lines | default([])
+      | select('search', 'webots_world/(worlds/shared_fleet_neuroworld[.]wbt|protos/|controllers/(nm_api_robot_controller|nm_ecology_supervisor)/|configs/)')
+      | list
+      | length
+    ) > 0
   notify: Reload systemd and restart the shared Webots world
 
 - name: Install the reused AARNN Webots device mapper header
