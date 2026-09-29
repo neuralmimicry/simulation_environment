@@ -1,0 +1,14 @@
+---
+- name: Apply the Webots stream firewall
+  ansible.builtin.systemd:
+    name: nm-webots-stream-firewall.service
+    state: restarted
+    enabled: true
+    daemon_reload: true
+
+- name: Reload systemd and restart the shared Webots world
+  ansible.builtin.systemd:
+    name: "{{ simulation_environment_webots_runtime_service }}"
+    state: "{{ 'restarted' if inventory_hostname == simulation_environment_webots_primary_host else 'stopped' }}"
+    enabled: "{{ inventory_hostname == simulation_environment_webots_primary_host }}"
+    daemon_reload: true

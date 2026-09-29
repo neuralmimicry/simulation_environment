@@ -1,0 +1,35 @@
+[Unit]
+Description=Persistent NeuralMimicry shared Webots world
+Wants=network-online.target
+Requires=nm-webots-stream-firewall.service
+After=network-online.target nm-webots-stream-firewall.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User={{ simulation_environment_webots_service_user }}
+Group={{ simulation_environment_webots_service_user }}
+WorkingDirectory={{ simulation_environment_webots_repo_path }}/webots_world/worlds
+Environment=HOME={{ simulation_environment_webots_home }}
+Environment=WEBOTS_HOME={{ simulation_environment_webots_home_dir }}
+Environment=NM_WEBOTS_FLEET_CONFIG={{ simulation_environment_webots_fleet_config }}
+Environment=NM_WEBOTS_RUNTIME_WORLD_FILE={{ simulation_environment_webots_state_world }}
+EnvironmentFile=-/etc/default/nm-webots-shared-world
+Environment=__GLX_VENDOR_LIBRARY_NAME={{ simulation_environment_webots_open_gl_vendor }}
+ExecStart={{ simulation_environment_webots_runtime_script }}
+Restart=always
+RestartSec=5
+TimeoutStopSec=90
+KillSignal=SIGINT
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ simulation_environment_webots_home }} {{ simulation_environment_webots_state_dir }}
+ReadOnlyPaths={{ simulation_environment_webots_repo_path }}
+
+[Install]
+WantedBy=multi-user.target

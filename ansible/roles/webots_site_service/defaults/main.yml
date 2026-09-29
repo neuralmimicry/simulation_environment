@@ -1,0 +1,137 @@
+---
+continuum_tenant_webots_enable: true
+
+continuum_tenant_webots_name: "webots"
+continuum_tenant_webots_service_name: "webots"
+continuum_tenant_webots_namespace: "webots"
+continuum_tenant_webots_service_account_name: "webots"
+
+continuum_tenant_webots_client_user: ""
+continuum_tenant_webots_client_home: ""
+continuum_tenant_webots_client_group: ""
+
+continuum_tenant_webots_prereq_packages:
+  - git
+  - ca-certificates
+  - curl
+  - rsync
+  - podman
+  - skopeo
+
+continuum_tenant_webots_src_root: "/opt/continuum/src"
+continuum_tenant_webots_workspace_root: "/opt/continuum/tenant-apps"
+continuum_tenant_webots_repo_dir: "{{ continuum_tenant_webots_src_root }}/simulation_environment"
+continuum_tenant_webots_workspace: "{{ continuum_tenant_webots_workspace_root }}/{{ continuum_tenant_webots_name }}"
+
+continuum_tenant_webots_use_local_dev_source: false
+continuum_tenant_webots_use_local_dev_fallback: true
+continuum_tenant_webots_local_dev_dir: "{{ nm_local_repo_root }}/simulation_environment"
+continuum_tenant_webots_repo_url: "git@github.com:neuralmimicry/simulation_environment.git"
+continuum_tenant_webots_repo_version: "main"
+continuum_tenant_webots_repo_update: true
+continuum_tenant_webots_repo_force: true
+continuum_tenant_webots_repo_clean_untracked: true
+continuum_tenant_webots_accept_hostkey: true
+continuum_tenant_webots_key_file: ""
+
+continuum_tenant_webots_image: "{{ lookup('env', 'WEBOTS_IMAGE') | default('ghcr.io/neuralmimicry/webots:latest', true) }}"
+continuum_tenant_webots_build_image: false
+continuum_tenant_webots_push_image: false
+continuum_tenant_webots_containerfile: "{{ continuum_tenant_webots_repo_dir }}/webots_service/Containerfile"
+continuum_tenant_webots_build_tool: "podman"
+continuum_tenant_webots_build_pull: true
+continuum_tenant_webots_build_no_cache: true
+continuum_tenant_webots_clear_builder_cache_before_build: true
+continuum_tenant_webots_clear_local_image_before_build: true
+continuum_tenant_webots_use_largest_fs_tmpdir_for_build: true
+continuum_tenant_webots_build_tmpdir: ""
+continuum_tenant_webots_build_tmpdir_name: ".swarmhpc-webots-build-tmp"
+continuum_tenant_webots_build_environment: {}
+continuum_tenant_webots_build_number: ""
+continuum_tenant_webots_git_commit: ""
+
+continuum_tenant_webots_registry_server: "ghcr.io"
+continuum_tenant_webots_registry_secret_enable: true
+continuum_tenant_webots_registry_secret_name: "ghcr-secret"
+continuum_tenant_webots_registry_secret_source_namespaces: []
+continuum_tenant_webots_registry_username: "{{ lookup('env', 'GITHUB_USER') | default(lookup('env', 'USER'), true) }}"
+continuum_tenant_webots_registry_password: "{{ lookup('env', 'GITHUB_TOKEN') | default('', true) }}"
+continuum_tenant_webots_image_pull_policy: "Always"
+
+continuum_tenant_webots_kubeconfig_path: "/etc/nmc/kubeconfig"
+continuum_tenant_webots_kube_context: ""
+continuum_tenant_webots_kubeconfig_user_copy: true
+continuum_tenant_webots_kubeconfig_user_path: ""
+continuum_tenant_webots_rollout_timeout_seconds: 600
+
+continuum_tenant_webots_port: 8080
+continuum_tenant_webots_replicas: 2
+continuum_tenant_webots_hpa_enable: true
+continuum_tenant_webots_hpa_min_replicas: 2
+continuum_tenant_webots_hpa_max_replicas: 8
+continuum_tenant_webots_hpa_cpu_utilization: 70
+continuum_tenant_webots_hpa_memory_utilization: 80
+
+continuum_tenant_webots_site_base_url: "{{ continuum_shared_site_base_url | default('https://neuralmimicry.ai', true) }}"
+continuum_tenant_webots_aarnn_app_base: "https://aarnn.neuralmimicry.ai"
+continuum_tenant_webots_central_auth_api_base: >-
+  {{
+    lookup('env', 'WEBOTS_CENTRAL_AUTH_API_BASE')
+    | default(
+        continuum_shared_auth_api_internal_base_url
+        | default('http://customers.customers.svc.cluster.local:5010', true),
+        true
+      )
+  }}
+continuum_tenant_webots_central_auth_timeout_secs: 10
+continuum_tenant_webots_cookie_domain: ".neuralmimicry.ai"
+continuum_tenant_webots_secure_cookies: true
+continuum_tenant_webots_session_cookie_name: "nm_webots_session"
+continuum_tenant_webots_world_source_base_url: "https://github.com/neuralmimicry/simulation_environment/blob/main"
+continuum_tenant_webots_cloud_run_base_url: ""
+continuum_tenant_webots_stream_url: "wss://webots.neuralmimicry.ai/stream"
+continuum_tenant_webots_default_world: "shared-fleet"
+continuum_tenant_webots_launch_overrides: {}
+continuum_tenant_webots_secret_store_dir: "{{ playbook_dir }}/.secrets/webots/{{ inventory_hostname }}"
+continuum_tenant_webots_auto_generate_secret_key: true
+continuum_tenant_webots_secret_key: "{{ lookup('env', 'WEBOTS_SECRET_KEY') | default('', true) }}"
+
+continuum_tenant_webots_node_name: ""
+continuum_tenant_webots_node_selector: {}
+continuum_tenant_webots_resources:
+  requests:
+    cpu: "250m"
+    memory: "256Mi"
+  limits:
+    cpu: "1500m"
+    memory: "1Gi"
+
+continuum_tenant_webots_create_ingress: true
+continuum_tenant_webots_stream_enable: true
+continuum_tenant_webots_stream_host_ip: "192.168.1.66"
+continuum_tenant_webots_stream_port: 1234
+continuum_tenant_webots_stream_service_name: "webots-stream"
+continuum_tenant_webots_stream_ingress_name: "webots-stream"
+continuum_tenant_webots_stream_path: "/stream"
+continuum_tenant_webots_stream_auth_url: "http://webots.webots.svc.cluster.local:8080/api/stream/authorize"
+continuum_tenant_webots_stream_auth_timeout: "5"
+continuum_tenant_webots_stream_proxy_timeout: "3600"
+continuum_tenant_webots_ingress_hostname: "webots.neuralmimicry.ai"
+continuum_tenant_webots_ingress_class: "nginx"
+continuum_tenant_webots_ingress_backend_protocol: "HTTP"
+continuum_tenant_webots_ingress_ssl_redirect: true
+continuum_tenant_webots_ingress_force_ssl_redirect: false
+continuum_tenant_webots_enable_tls: true
+continuum_tenant_webots_tls_issuer: "letsencrypt-prod"
+continuum_tenant_webots_ingress_tls_secret_name: "webots-neuralmimicry-ai-tls"
+continuum_tenant_webots_ingress_extra_annotations: {}
+
+continuum_tenant_webots_register_dns: true
+continuum_tenant_webots_dns_service_name: "{{ continuum_tenant_webots_service_name }}"
+continuum_tenant_webots_dns_domain: "neuralmimicry.ai"
+continuum_tenant_webots_dns_target_ip: ""
+continuum_tenant_webots_dns_server: ""
+continuum_tenant_webots_dns_servers: []
+continuum_tenant_webots_dns_registration_script: "/usr/local/bin/nmc-register-service-dns.sh"
+
+continuum_tenant_webots_extra_env: {}

@@ -1,0 +1,956 @@
+---
+- name: Deploy Webots tenant workload through generic Kubernetes tenant role
+  when: continuum_tenant_webots_enable | bool
+  block:
+    - name: Ensure local Webots secret store directory exists
+      when:
+        - continuum_tenant_webots_auto_generate_secret_key | bool
+        - continuum_tenant_webots_secret_key | trim | length == 0
+        - continuum_tenant_webots_secret_store_dir | trim | length > 0
+      delegate_to: localhost
+      become: false
+      ansible.builtin.file:
+        path: "{{ continuum_tenant_webots_secret_store_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Derive effective Webots secret key
+      no_log: true
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_secret_key_effective: >-
+          {{
+            (continuum_tenant_webots_secret_key | trim)
+            if (continuum_tenant_webots_secret_key | trim | length > 0)
+            else (
+              lookup(
+                'password',
+                continuum_tenant_webots_secret_store_dir ~ '/secret_key chars=ascii_letters,digits length=64'
+              )
+              if (continuum_tenant_webots_auto_generate_secret_key | bool)
+              else ''
+            )
+          }}
+
+    - name: Refresh apt cache for Webots prerequisites when stale
+      block:
+        - name: Update apt cache for Webots prerequisites
+          ansible.builtin.apt:
+            update_cache: true
+            cache_valid_time: 3600
+      rescue:
+        - name: Continue Webots prerequisite install with existing apt cache
+          ansible.builtin.debug:
+            msg: >-
+              Apt cache refresh failed while preparing Webots prerequisites on
+              {{ inventory_hostname }}. Continuing with the existing cache.
+
+    - name: Install Webots deployment prerequisites
+      ansible.builtin.apt:
+        name: "{{ continuum_tenant_webots_prereq_packages }}"
+        state: present
+
+    - name: Resolve effective Webots client user
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_client_user_effective: >-
+          {{
+            (continuum_tenant_webots_client_user | trim | length > 0)
+            | ternary(
+                (continuum_tenant_webots_client_user | trim),
+                (ansible_user | default(ansible_user_id))
+              )
+          }}
+
+    - name: Resolve Webots client home directory
+      ansible.builtin.command: "getent passwd {{ continuum_tenant_webots_client_user_effective }}"
+      register: continuum_tenant_webots_client_home_cmd
+      changed_when: false
+
+    - name: Resolve Webots client primary group
+      ansible.builtin.command: "id -gn {{ continuum_tenant_webots_client_user_effective }}"
+      register: continuum_tenant_webots_client_group_cmd
+      changed_when: false
+
+    - name: Set Webots client identity facts
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_client_home_effective: >-
+          {{
+            (continuum_tenant_webots_client_home | trim | length > 0)
+            | ternary(
+                (continuum_tenant_webots_client_home | trim),
+                ((continuum_tenant_webots_client_home_cmd.stdout.split(':'))[5] | default(''))
+              )
+          }}
+        continuum_tenant_webots_client_group_effective: >-
+          {{
+            (continuum_tenant_webots_client_group | trim | length > 0)
+            | ternary(
+                (continuum_tenant_webots_client_group | trim),
+                (continuum_tenant_webots_client_group_cmd.stdout | trim)
+              )
+          }}
+        continuum_tenant_webots_key_file_effective: >-
+          {{
+            (continuum_tenant_webots_key_file | trim | length > 0)
+            | ternary((continuum_tenant_webots_key_file | trim), '')
+          }}
+
+    - name: Assert Webots client context resolved
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_client_home_effective | length > 0
+          - continuum_tenant_webots_client_group_effective | length > 0
+        fail_msg: >-
+          Unable to resolve effective Webots client home/group for user
+          '{{ continuum_tenant_webots_client_user_effective }}'.
+
+    - name: Ensure Webots workspace directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ continuum_tenant_webots_src_root }}"
+          owner: "{{ continuum_tenant_webots_client_user_effective }}"
+          group: "{{ continuum_tenant_webots_client_group_effective }}"
+          mode: "0755"
+        - path: "{{ continuum_tenant_webots_workspace_root }}"
+          owner: "{{ continuum_tenant_webots_client_user_effective }}"
+          group: "{{ continuum_tenant_webots_client_group_effective }}"
+          mode: "0755"
+        - path: "{{ continuum_tenant_webots_repo_dir }}"
+          owner: "{{ continuum_tenant_webots_client_user_effective }}"
+          group: "{{ continuum_tenant_webots_client_group_effective }}"
+          mode: "0755"
+        - path: "{{ continuum_tenant_webots_workspace }}"
+          owner: "{{ continuum_tenant_webots_client_user_effective }}"
+          group: "{{ continuum_tenant_webots_client_group_effective }}"
+          mode: "0755"
+
+    - name: Resolve Webots image rollout strategy
+      ansible.builtin.include_role:
+        name: continuum_shared_image_resolution
+      vars:
+        continuum_shared_image_resolution_mode: "single_image"
+        continuum_shared_image_resolution_service_name: "Webots"
+        continuum_shared_image_resolution_image_var_name: "continuum_tenant_webots_image"
+        continuum_shared_image_resolution_build_var_name: "continuum_tenant_webots_build_image"
+        continuum_shared_image_resolution_push_var_name: "continuum_tenant_webots_push_image"
+        continuum_shared_image_resolution_repo_version_var_name: "continuum_tenant_webots_repo_version"
+        continuum_shared_image_resolution_current_image_ref: "{{ continuum_tenant_webots_image | default('', true) | trim }}"
+        continuum_shared_image_resolution_default_image_ref: "ghcr.io/neuralmimicry/webots:latest"
+        continuum_shared_image_resolution_repo_url: "{{ continuum_tenant_webots_repo_url }}"
+        continuum_shared_image_resolution_repo_version: "{{ continuum_tenant_webots_repo_version }}"
+        continuum_shared_image_resolution_registry_username: "{{ continuum_tenant_webots_registry_username | default('', true) | trim }}"
+        continuum_shared_image_resolution_registry_password: "{{ continuum_tenant_webots_registry_password | default('', true) | trim }}"
+        continuum_shared_image_resolution_github_api_token: "{{ continuum_tenant_webots_registry_password | default('', true) | trim }}"
+        continuum_shared_image_resolution_current_build_image: "{{ continuum_tenant_webots_build_image | bool }}"
+        continuum_shared_image_resolution_current_push_image: "{{ continuum_tenant_webots_push_image | bool }}"
+        continuum_shared_image_resolution_auto_push_when_building: true
+
+    - name: Determine whether Webots source checkout is required
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_source_required: "{{ continuum_tenant_webots_build_image | bool }}"
+
+    - name: Probe local Webots development source
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - continuum_tenant_webots_use_local_dev_source | bool
+          or (continuum_tenant_webots_use_local_dev_fallback | bool)
+      delegate_to: localhost
+      become: false
+      ansible.builtin.stat:
+        path: "{{ continuum_tenant_webots_local_dev_dir }}/webots_service/app.py"
+      register: continuum_tenant_webots_local_dev_stat
+
+    - name: Select Webots source mode
+      when: continuum_tenant_webots_source_required | bool
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_source_mode: >-
+          {{
+            (
+              (continuum_tenant_webots_use_local_dev_source | bool)
+              and (continuum_tenant_webots_local_dev_stat.stat.exists | default(false))
+            )
+            | ternary('local', 'git')
+          }}
+
+    - name: Assert git source is configured when local Webots source is unavailable
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - continuum_tenant_webots_source_mode == 'git'
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_repo_url | trim | length > 0
+        fail_msg: >-
+          Set continuum_tenant_webots_repo_url or provide a local AARNN/Webots source tree at
+          '{{ continuum_tenant_webots_local_dev_dir }}'.
+
+    - name: Sync local Webots development repository to managed host
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - continuum_tenant_webots_source_mode == 'local'
+      block:
+        - name: Synchronize local Webots source tree
+          ansible.posix.synchronize:
+            src: "{{ continuum_tenant_webots_local_dev_dir }}/"
+            dest: "{{ continuum_tenant_webots_repo_dir }}/"
+            owner: yes
+            group: yes
+            perms: yes
+            delete: yes
+            recursive: yes
+            rsync_opts:
+              - "--exclude=.git"
+              - "--exclude=.venv"
+              - "--exclude=target"
+              - "--exclude=webots_world/controllers/*/build"
+              - "--exclude=webots_world/controllers/*/nm_api_robot_controller"
+              - "--exclude=webots_world/controllers/*/nm_ecology_supervisor"
+              - "--exclude=data"
+              - "--exclude=logs"
+              - "--exclude=outputs"
+              - "--exclude=__pycache__"
+              - "--exclude=.pytest_cache"
+              - "--exclude=.idea"
+
+        - name: Fix ownership of synced Webots repository
+          ansible.builtin.file:
+            path: "{{ continuum_tenant_webots_repo_dir }}"
+            owner: "{{ continuum_tenant_webots_client_user_effective }}"
+            group: "{{ continuum_tenant_webots_client_group_effective }}"
+            recurse: true
+            state: directory
+
+    - name: Probe existing Webots source repository path for git metadata
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - continuum_tenant_webots_source_mode == 'git'
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        argv:
+          - git
+          - -C
+          - "{{ continuum_tenant_webots_repo_dir }}"
+          - rev-parse
+          - --is-inside-work-tree
+      register: continuum_tenant_webots_repo_git_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Remove non-git Webots source repository path before checkout
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - continuum_tenant_webots_source_mode == 'git'
+        - (continuum_tenant_webots_repo_git_probe.rc | int) != 0
+      ansible.builtin.file:
+        path: "{{ continuum_tenant_webots_repo_dir }}"
+        state: absent
+
+    - name: Checkout Webots source repository
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - continuum_tenant_webots_source_mode == 'git'
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.git:
+        repo: "{{ continuum_tenant_webots_repo_url }}"
+        dest: "{{ continuum_tenant_webots_repo_dir }}"
+        version: "{{ continuum_tenant_webots_repo_version }}"
+        update: "{{ continuum_tenant_webots_repo_update | bool }}"
+        force: "{{ continuum_tenant_webots_repo_force | bool }}"
+        accept_hostkey: "{{ continuum_tenant_webots_accept_hostkey | bool }}"
+        key_file: "{{ (continuum_tenant_webots_key_file_effective | length > 0) | ternary(continuum_tenant_webots_key_file_effective, omit) }}"
+        ssh_opts: "{{ (continuum_tenant_webots_key_file_effective | length > 0) | ternary('-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new', '-o StrictHostKeyChecking=accept-new') }}"
+
+    - name: Clean Webots source repository working tree
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - continuum_tenant_webots_source_mode == 'git'
+        - continuum_tenant_webots_repo_clean_untracked | bool
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        argv:
+          - git
+          - -C
+          - "{{ continuum_tenant_webots_repo_dir }}"
+          - clean
+          - -fdx
+      register: continuum_tenant_webots_repo_clean_cmd
+      changed_when: (continuum_tenant_webots_repo_clean_cmd.stdout | default('') | trim | length) > 0
+
+    - name: Define required Webots packaging files
+      when: continuum_tenant_webots_source_required | bool
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_required_files:
+          - "{{ continuum_tenant_webots_repo_dir }}/Dockerfile"
+          - "{{ continuum_tenant_webots_repo_dir }}/README.md"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots.yaml"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_service/Containerfile"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_service/app.py"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_service/default_catalog.json"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_service/requirements.txt"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/worlds/celegans_neuroworld.wbt"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/worlds/drosophila_neuroworld.wbt"
+          - "{{ continuum_tenant_webots_repo_dir }}/webots_world/worlds/neuroworld.wbt"
+
+    - name: Check required Webots packaging files
+      when: continuum_tenant_webots_source_required | bool
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ continuum_tenant_webots_required_files }}"
+      register: continuum_tenant_webots_required_stats
+
+    - name: Derive Webots packaging validity
+      when: continuum_tenant_webots_source_required | bool
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_packaging_valid: >-
+          {{
+            (continuum_tenant_webots_required_stats.results
+             | selectattr('stat.exists', 'equalto', true)
+             | list
+             | length) == (continuum_tenant_webots_required_files | length)
+          }}
+
+    - name: Validate local Webots development fallback path
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - (continuum_tenant_webots_source_mode | default('git')) == 'local'
+          or (
+            not (continuum_tenant_webots_packaging_valid | bool)
+            and (continuum_tenant_webots_use_local_dev_fallback | bool)
+          )
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_local_dev_available: "{{ continuum_tenant_webots_local_dev_stat.stat.exists | default(false) }}"
+
+    - name: Assert local Webots development fallback is available
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - (continuum_tenant_webots_source_mode | default('git')) == 'local'
+          or (
+            not (continuum_tenant_webots_packaging_valid | bool)
+            and (continuum_tenant_webots_use_local_dev_fallback | bool)
+          )
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_local_dev_available | default(false)
+        fail_msg: >-
+          Webots source at '{{ continuum_tenant_webots_repo_dir }}' is not packaged as expected and
+          local fallback '{{ continuum_tenant_webots_local_dev_dir }}' was not found.
+
+    - name: Replace Webots repository from local development fallback
+      when:
+        - continuum_tenant_webots_source_required | bool
+        - (continuum_tenant_webots_source_mode | default('git')) == 'local'
+          or (
+            not (continuum_tenant_webots_packaging_valid | bool)
+            and (continuum_tenant_webots_use_local_dev_fallback | bool)
+          )
+      block:
+        - name: Remove invalid Webots repository
+          ansible.builtin.file:
+            path: "{{ continuum_tenant_webots_repo_dir }}"
+            state: absent
+
+        - name: Recreate Webots repository path
+          ansible.builtin.file:
+            path: "{{ continuum_tenant_webots_repo_dir }}"
+            state: directory
+            owner: "{{ continuum_tenant_webots_client_user_effective }}"
+            group: "{{ continuum_tenant_webots_client_group_effective }}"
+            mode: "0755"
+
+        - name: Synchronize local Webots development repository fallback to managed host
+          ansible.posix.synchronize:
+            src: "{{ continuum_tenant_webots_local_dev_dir }}/"
+            dest: "{{ continuum_tenant_webots_repo_dir }}/"
+            owner: yes
+            group: yes
+            perms: yes
+            delete: no
+            recursive: yes
+            rsync_opts:
+              - "--exclude=.git"
+              - "--exclude=target"
+              - "--exclude=dist"
+              - "--exclude=__pycache__"
+              - "--exclude=.pytest_cache"
+          become: false
+
+        - name: Fix ownership of Webots repository after fallback sync
+          ansible.builtin.file:
+            path: "{{ continuum_tenant_webots_repo_dir }}"
+            owner: "{{ continuum_tenant_webots_client_user_effective }}"
+            group: "{{ continuum_tenant_webots_client_group_effective }}"
+            recurse: true
+            state: directory
+
+    - name: Re-check required Webots packaging files after fallback
+      when: continuum_tenant_webots_source_required | bool
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ continuum_tenant_webots_required_files }}"
+      register: continuum_tenant_webots_required_stats_after_fallback
+
+    - name: Assert Webots source is packaged correctly
+      when: continuum_tenant_webots_source_required | bool
+      ansible.builtin.assert:
+        that:
+          - >-
+            (continuum_tenant_webots_required_stats_after_fallback.results
+             | selectattr('stat.exists', 'equalto', true)
+             | list
+             | length) == (continuum_tenant_webots_required_files | length)
+        fail_msg: >-
+          Webots source is not packaged correctly at '{{ continuum_tenant_webots_repo_dir }}'.
+
+    - name: Derive effective Webots deployment values
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_image_effective: "{{ continuum_tenant_webots_image | trim }}"
+        continuum_tenant_webots_manifest_template_path: "{{ role_path }}/templates/webots-stack.yaml.j2"
+        continuum_tenant_webots_rollout_targets:
+          - "deployment/{{ continuum_tenant_webots_name }}"
+        continuum_tenant_webots_registry_secret_enabled_effective: "{{ continuum_tenant_webots_registry_secret_enable | bool }}"
+        continuum_tenant_webots_registry_secret_create_enabled_effective: >-
+          {{
+            (continuum_tenant_webots_registry_secret_enable | bool)
+            and (continuum_tenant_webots_registry_username | trim | length > 0)
+            and (continuum_tenant_webots_registry_password | trim | length > 0)
+          }}
+        continuum_tenant_webots_replicas_effective: >-
+          {{
+            (
+              [continuum_tenant_webots_replicas | int, continuum_tenant_webots_hpa_min_replicas | int]
+              | max
+            )
+            if (continuum_tenant_webots_hpa_enable | bool)
+            else (continuum_tenant_webots_replicas | int)
+          }}
+
+    - name: Compose default Webots plain environment variables
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_env_defaults: >-
+          {{
+            {
+              'WEBOTS_HOST': '0.0.0.0',
+              'WEBOTS_PORT': (continuum_tenant_webots_port | string),
+              'WEBOTS_SESSION_COOKIE_NAME': (continuum_tenant_webots_session_cookie_name | string),
+              'WEBOTS_SECURE_COOKIES': ((continuum_tenant_webots_secure_cookies | bool) | ternary('true', 'false')),
+              'WEBOTS_SITE_BASE_URL': (continuum_tenant_webots_site_base_url | string),
+              'WEBOTS_AARNN_APP_BASE': (continuum_tenant_webots_aarnn_app_base | string),
+              'WEBOTS_CENTRAL_AUTH_API_BASE': (continuum_tenant_webots_central_auth_api_base | string),
+              'WEBOTS_CENTRAL_AUTH_TIMEOUT_SECS': (continuum_tenant_webots_central_auth_timeout_secs | string),
+              'WEBOTS_WORLD_SOURCE_BASE_URL': (continuum_tenant_webots_world_source_base_url | string),
+              'WEBOTS_CLOUD_RUN_BASE_URL': (continuum_tenant_webots_cloud_run_base_url | string),
+              'WEBOTS_STREAM_URL': (continuum_tenant_webots_stream_url | string),
+              'WEBOTS_DEFAULT_WORLD': (continuum_tenant_webots_default_world | string)
+            }
+            | combine(
+                (continuum_tenant_webots_cookie_domain | trim | length > 0)
+                | ternary({'WEBOTS_COOKIE_DOMAIN': (continuum_tenant_webots_cookie_domain | string)}, {})
+              )
+            | combine(
+                ((continuum_tenant_webots_launch_overrides | default({}) | length) > 0)
+                | ternary(
+                    {'WEBOTS_LAUNCH_OVERRIDES_JSON': (continuum_tenant_webots_launch_overrides | to_json)},
+                    {}
+                  )
+              )
+          }}
+
+    - name: Merge effective Webots environment variables
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_env_effective: >-
+          {{
+            (continuum_tenant_webots_env_defaults | default({}))
+            | combine(continuum_tenant_webots_extra_env | default({}))
+          }}
+
+    - name: Normalize Webots environment variables
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_env_items: >-
+          {{
+            (continuum_tenant_webots_env_effective | default({}))
+            | dict2items
+            | sort(attribute='key')
+          }}
+
+    - name: Assert Webots environment variable names are valid
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              continuum_tenant_webots_env_items
+              | map(attribute='key')
+              | select('match', '^[A-Za-z_][A-Za-z0-9_]*$')
+              | list
+              | length
+            ) == (continuum_tenant_webots_env_items | length)
+        fail_msg: >-
+          Webots environment variable names must match ^[A-Za-z_][A-Za-z0-9_]*$.
+
+    - name: Assert Webots secret key is configured
+      no_log: true
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_secret_key_effective | trim | length > 0
+        fail_msg: >-
+          Webots deployment requires a non-empty session secret key.
+
+    - name: Assert Webots image reference is configured
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_image_effective | length > 0
+        fail_msg: continuum_tenant_webots_image must not be empty.
+
+    - name: Assert Webots centralized auth configuration is complete
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_central_auth_api_base | trim | length > 0
+        fail_msg: >-
+          Webots requires continuum_tenant_webots_central_auth_api_base so it can
+          validate centralized access tokens.
+
+    - name: Assert Webots shared stream configuration is complete
+      ansible.builtin.assert:
+        that:
+          - not (continuum_tenant_webots_stream_enable | bool) or continuum_tenant_webots_stream_host_ip | trim | length > 0
+          - not (continuum_tenant_webots_stream_enable | bool) or continuum_tenant_webots_stream_port | int > 0
+          - not (continuum_tenant_webots_stream_enable | bool) or continuum_tenant_webots_stream_auth_url | trim | length > 0
+        fail_msg: >-
+          The authenticated Webots W3D route needs a stream host IP, TCP port, and broker authorization endpoint.
+
+    - name: Assert Webots autoscaling settings are valid
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_replicas_effective | int >= 1
+          - not (continuum_tenant_webots_hpa_enable | bool) or (continuum_tenant_webots_hpa_min_replicas | int) >= 1
+          - not (continuum_tenant_webots_hpa_enable | bool) or (continuum_tenant_webots_hpa_max_replicas | int) >= (continuum_tenant_webots_hpa_min_replicas | int)
+        fail_msg: >-
+          Webots replica or HPA values are invalid. Ensure replicas >= 1 and, when HPA
+          is enabled, max replicas >= min replicas >= 1.
+
+    - name: Assert registry credentials are available when pushing the Webots image
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - continuum_tenant_webots_push_image | bool
+      ansible.builtin.assert:
+        that:
+          - continuum_tenant_webots_registry_password | trim | length > 0
+        fail_msg: >-
+          continuum_tenant_webots_push_image=true requires a registry password/token.
+          Export GITHUB_TOKEN or set continuum_tenant_webots_registry_password.
+
+    - name: Read Webots git commit count for image metadata
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - (continuum_tenant_webots_build_number | string | trim | length) == 0
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        argv:
+          - git
+          - rev-list
+          - --count
+          - HEAD
+        chdir: "{{ continuum_tenant_webots_repo_dir }}"
+      environment:
+        HOME: "{{ continuum_tenant_webots_client_home_effective }}"
+      register: continuum_tenant_webots_git_build_number
+      changed_when: false
+      failed_when: false
+
+    - name: Read Webots git commit hash for image metadata
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - (continuum_tenant_webots_git_commit | string | trim | length) == 0
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        argv:
+          - git
+          - rev-parse
+          - HEAD
+        chdir: "{{ continuum_tenant_webots_repo_dir }}"
+      environment:
+        HOME: "{{ continuum_tenant_webots_client_home_effective }}"
+      register: continuum_tenant_webots_git_head
+      changed_when: false
+      failed_when: false
+
+    - name: Derive effective Webots image build metadata
+      when: continuum_tenant_webots_build_image | bool
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_build_number_effective: >-
+          {{
+            (continuum_tenant_webots_build_number | string | trim)
+            if (continuum_tenant_webots_build_number | string | trim | length) > 0
+            else (
+              (continuum_tenant_webots_git_build_number.stdout | default('') | trim)
+              if ((continuum_tenant_webots_git_build_number.stdout | default('') | trim) is match('^[0-9]+$'))
+              else '0'
+            )
+          }}
+        continuum_tenant_webots_git_commit_effective: >-
+          {{
+            (continuum_tenant_webots_git_commit | string | trim)
+            if (continuum_tenant_webots_git_commit | string | trim | length) > 0
+            else (
+              (continuum_tenant_webots_git_head.stdout | default('') | trim)
+              if ((continuum_tenant_webots_git_head.stdout | default('') | trim | length) > 0)
+              else 'unknown'
+            )
+          }}
+
+    - name: Resolve Webots build mountpoint with the most free writable space
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - (continuum_tenant_webots_build_tmpdir | trim | length) == 0
+        - continuum_tenant_webots_use_largest_fs_tmpdir_for_build | bool
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_build_mountpoint: >-
+          {{
+            (
+              (ansible_mounts | default([]))
+              | selectattr('mount', 'defined')
+              | selectattr('fstype', 'defined')
+              | selectattr('size_available', 'defined')
+              | selectattr('options', 'defined')
+              | rejectattr('fstype', 'in', ['tmpfs', 'devtmpfs', 'proc', 'sysfs', 'devpts', 'squashfs', 'overlay', 'ramfs', 'cgroup2', 'nfs', 'nfs4', 'cifs', 'smbfs', 'sshfs', 'fuse.sshfs', 'glusterfs', 'ceph', 'cephfs', 'lustre'])
+              | rejectattr('options', 'search', '(^|,)ro(,|$)')
+              | rejectattr('options', 'search', '(^|,)noexec(,|$)')
+              | rejectattr('mount', 'equalto', '/boot')
+              | rejectattr('mount', 'equalto', '/boot/firmware')
+              | rejectattr('mount', 'search', '^/var/lib/(kubelet|containerd|containers|rancher)(/|$)')
+              | rejectattr('mount', 'search', '^/srv/k8s-data(/|$)')
+              | sort(attribute='size_available', reverse=true)
+              | map(attribute='mount')
+              | list
+              | first
+            ) | default('/')
+          }}
+
+    - name: Resolve Webots build temporary directory path
+      when: continuum_tenant_webots_build_image | bool
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_build_tmpdir_effective: >-
+          {{
+            (continuum_tenant_webots_build_tmpdir | trim)
+            if (continuum_tenant_webots_build_tmpdir | trim | length) > 0
+            else (
+              (
+                ((continuum_tenant_webots_build_mountpoint | default('/')) == '/')
+                | ternary(
+                    '/' ~ continuum_tenant_webots_build_tmpdir_name,
+                    (continuum_tenant_webots_build_mountpoint | default('/')) ~ '/' ~ continuum_tenant_webots_build_tmpdir_name
+                  )
+              )
+              if (continuum_tenant_webots_use_largest_fs_tmpdir_for_build | bool)
+              else ''
+            )
+          }}
+
+    - name: Ensure Webots build temporary directory exists
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - (continuum_tenant_webots_build_tmpdir_effective | default('') | trim | length) > 0
+      ansible.builtin.file:
+        path: "{{ continuum_tenant_webots_build_tmpdir_effective }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "1777"
+
+    - name: Build effective Webots container environment
+      when: continuum_tenant_webots_build_image | bool
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_build_environment_effective: >-
+          {{
+            (
+              (continuum_tenant_webots_build_tmpdir_effective | default('') | trim | length > 0)
+              | ternary(
+                  {
+                    'TMPDIR': continuum_tenant_webots_build_tmpdir_effective,
+                    'TMP': continuum_tenant_webots_build_tmpdir_effective,
+                    'TEMP': continuum_tenant_webots_build_tmpdir_effective
+                  },
+                  {}
+                )
+            )
+            | combine(continuum_tenant_webots_build_environment | default({}), recursive=True)
+          }}
+
+    - name: Clear builder cache before Webots image build
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - continuum_tenant_webots_clear_builder_cache_before_build | bool
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        argv:
+          - "{{ continuum_tenant_webots_build_tool }}"
+          - builder
+          - prune
+          - -f
+      environment: >-
+        {{
+          {'HOME': continuum_tenant_webots_client_home_effective}
+          | combine(continuum_tenant_webots_build_environment_effective | default({}), recursive=True)
+        }}
+      register: continuum_tenant_webots_builder_prune
+      changed_when: (continuum_tenant_webots_builder_prune.rc | int) == 0
+      failed_when: false
+
+    - name: Remove local Webots image before rebuild
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - continuum_tenant_webots_clear_local_image_before_build | bool
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        argv:
+          - "{{ continuum_tenant_webots_build_tool }}"
+          - rmi
+          - -f
+          - "{{ continuum_tenant_webots_image_effective }}"
+      environment: >-
+        {{
+          {'HOME': continuum_tenant_webots_client_home_effective}
+          | combine(continuum_tenant_webots_build_environment_effective | default({}), recursive=True)
+        }}
+      register: continuum_tenant_webots_local_image_remove
+      changed_when: (continuum_tenant_webots_local_image_remove.rc | int) == 0
+      failed_when: false
+
+    - name: Build Webots container image
+      when: continuum_tenant_webots_build_image | bool
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        cmd: >-
+          {{ continuum_tenant_webots_build_tool }} build
+          --network=host
+          {{ '--pull' if (continuum_tenant_webots_build_pull | bool) else '' }}
+          {{ '--no-cache' if (continuum_tenant_webots_build_no_cache | bool) else '' }}
+          --build-arg BUILD_NUMBER="{{ continuum_tenant_webots_build_number_effective }}"
+          --build-arg GIT_COMMIT="{{ continuum_tenant_webots_git_commit_effective }}"
+          -f "{{ continuum_tenant_webots_containerfile }}"
+          -t "{{ continuum_tenant_webots_image_effective }}"
+          "{{ continuum_tenant_webots_repo_dir }}"
+        chdir: "{{ continuum_tenant_webots_repo_dir }}"
+      environment: >-
+        {{
+          {'HOME': continuum_tenant_webots_client_home_effective}
+          | combine(continuum_tenant_webots_build_environment_effective | default({}), recursive=True)
+        }}
+      register: continuum_tenant_webots_image_build
+      changed_when: true
+
+    - name: Log in to container registry for Webots image push
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - continuum_tenant_webots_push_image | bool
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        argv:
+          - "{{ continuum_tenant_webots_build_tool }}"
+          - login
+          - "{{ continuum_tenant_webots_registry_server }}"
+          - -u
+          - "{{ continuum_tenant_webots_registry_username }}"
+          - --password-stdin
+        stdin: "{{ continuum_tenant_webots_registry_password }}"
+      environment: >-
+        {{
+          {'HOME': continuum_tenant_webots_client_home_effective}
+          | combine(continuum_tenant_webots_build_environment_effective | default({}), recursive=True)
+        }}
+      register: continuum_tenant_webots_registry_login
+      changed_when: false
+      no_log: true
+
+    - name: Push Webots container image to registry
+      when:
+        - continuum_tenant_webots_build_image | bool
+        - continuum_tenant_webots_push_image | bool
+      become: true
+      become_user: "{{ continuum_tenant_webots_client_user_effective }}"
+      ansible.builtin.command:
+        cmd: >-
+          {{ continuum_tenant_webots_build_tool }} push
+          "{{ continuum_tenant_webots_image_effective }}"
+      environment: >-
+        {{
+          {'HOME': continuum_tenant_webots_client_home_effective}
+          | combine(continuum_tenant_webots_build_environment_effective | default({}), recursive=True)
+        }}
+      register: continuum_tenant_webots_image_push
+      changed_when: true
+
+    - name: Derive Webots registry secret source namespaces
+      when:
+        - continuum_tenant_webots_registry_secret_enabled_effective | bool
+        - not (continuum_tenant_webots_registry_secret_create_enabled_effective | bool)
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_registry_secret_source_namespaces_effective: >-
+          {{
+            continuum_tenant_webots_registry_secret_source_namespaces
+            | default([])
+            | map('string')
+            | map('trim')
+            | reject('equalto', '')
+            | reject('equalto', continuum_tenant_webots_namespace)
+            | unique
+            | list
+          }}
+
+    - name: Check whether Webots registry secret already exists in the target namespace
+      when:
+        - continuum_tenant_webots_registry_secret_enabled_effective | bool
+        - not (continuum_tenant_webots_registry_secret_create_enabled_effective | bool)
+      ansible.builtin.shell: >-
+        kubectl
+        --kubeconfig {{ continuum_tenant_webots_kubeconfig_path | quote }}
+        {% if continuum_tenant_webots_kube_context | trim | length > 0 %}
+        --context {{ continuum_tenant_webots_kube_context | quote }}
+        {% endif %}
+        -n {{ continuum_tenant_webots_namespace | quote }}
+        get secret {{ continuum_tenant_webots_registry_secret_name | quote }}
+        -o jsonpath='{.data.\.dockerconfigjson}'
+      register: continuum_tenant_webots_registry_secret_target_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Probe source namespaces for a reusable Webots registry secret
+      when:
+        - continuum_tenant_webots_registry_secret_enabled_effective | bool
+        - not (continuum_tenant_webots_registry_secret_create_enabled_effective | bool)
+        - continuum_tenant_webots_registry_secret_target_probe.rc | int != 0
+      ansible.builtin.shell: >-
+        kubectl
+        --kubeconfig {{ continuum_tenant_webots_kubeconfig_path | quote }}
+        {% if continuum_tenant_webots_kube_context | trim | length > 0 %}
+        --context {{ continuum_tenant_webots_kube_context | quote }}
+        {% endif %}
+        -n {{ item | quote }}
+        get secret {{ continuum_tenant_webots_registry_secret_name | quote }}
+        -o jsonpath='{.data.\.dockerconfigjson}'
+      loop: "{{ continuum_tenant_webots_registry_secret_source_namespaces_effective | default([]) }}"
+      register: continuum_tenant_webots_registry_secret_source_probes
+      changed_when: false
+      failed_when: false
+
+    - name: Derive effective Webots registry secret sync facts
+      when:
+        - continuum_tenant_webots_registry_secret_enabled_effective | bool
+        - not (continuum_tenant_webots_registry_secret_create_enabled_effective | bool)
+      ansible.builtin.set_fact:
+        continuum_tenant_webots_registry_secret_sync_enabled_effective: >-
+          {{
+            (continuum_tenant_webots_registry_secret_target_probe.rc | int != 0)
+            and (
+              continuum_tenant_webots_registry_secret_source_probes.results
+              | default([])
+              | selectattr('rc', 'eq', 0)
+              | list
+              | length > 0
+            )
+          }}
+        continuum_tenant_webots_registry_secret_dockerconfigjson_effective: >-
+          {{
+            (
+              continuum_tenant_webots_registry_secret_source_probes.results
+              | default([])
+              | selectattr('rc', 'eq', 0)
+              | map(attribute='stdout')
+              | map('trim')
+              | reject('equalto', '')
+              | first
+            )
+            if (continuum_tenant_webots_registry_secret_target_probe.rc | int != 0)
+            else ''
+          }}
+        continuum_tenant_webots_registry_secret_source_namespace_effective: >-
+          {{
+            (
+              continuum_tenant_webots_registry_secret_source_probes.results
+              | default([])
+              | selectattr('rc', 'eq', 0)
+              | map(attribute='item')
+              | first
+            )
+            if (continuum_tenant_webots_registry_secret_target_probe.rc | int != 0)
+            else ''
+          }}
+
+    - name: Report Webots registry secret reuse decision
+      when: continuum_tenant_webots_registry_secret_sync_enabled_effective | default(false) | bool
+      ansible.builtin.debug:
+        msg: >-
+          Reusing image pull secret '{{ continuum_tenant_webots_registry_secret_name }}'
+          from namespace '{{ continuum_tenant_webots_registry_secret_source_namespace_effective }}'
+          for the Webots namespace.
+
+    - name: Assert Webots image pull secret is available when registry auth is enabled
+      when:
+        - continuum_tenant_webots_registry_secret_enabled_effective | bool
+        - not (continuum_tenant_webots_registry_secret_create_enabled_effective | bool)
+      ansible.builtin.assert:
+        that:
+          - >-
+            (continuum_tenant_webots_registry_secret_target_probe.rc | int == 0)
+            or (continuum_tenant_webots_registry_secret_sync_enabled_effective | default(false) | bool)
+        fail_msg: >-
+          continuum_tenant_webots_registry_secret_enable=true but secret
+          '{{ continuum_tenant_webots_registry_secret_name }}' is not present in
+          namespace '{{ continuum_tenant_webots_namespace }}', no controller GHCR
+          credentials were provided to create it, and no reusable secret was found in
+          {{ continuum_tenant_webots_registry_secret_source_namespaces_effective | default([]) }}.
+          Export GITHUB_USER/GITHUB_TOKEN or configure
+          continuum_tenant_webots_registry_secret_source_namespaces with a namespace
+          that already contains the pull secret.
+
+    - name: Deploy Webots cluster stack
+      ansible.builtin.include_role:
+        name: continuum_tenant_k8s_app
+      vars:
+        continuum_tenant_k8s_app_enable: true
+        continuum_tenant_k8s_app_name: "{{ continuum_tenant_webots_name }}"
+        continuum_tenant_k8s_app_namespace: "{{ continuum_tenant_webots_namespace }}"
+        continuum_tenant_k8s_app_manifest_template: "{{ continuum_tenant_webots_manifest_template_path }}"
+        continuum_tenant_k8s_app_client_user: "{{ continuum_tenant_webots_client_user_effective }}"
+        continuum_tenant_k8s_app_client_home: "{{ continuum_tenant_webots_client_home_effective }}"
+        continuum_tenant_k8s_app_client_group: "{{ continuum_tenant_webots_client_group_effective }}"
+        continuum_tenant_k8s_app_kubeconfig_path: "{{ continuum_tenant_webots_kubeconfig_path }}"
+        continuum_tenant_k8s_app_kube_context: "{{ continuum_tenant_webots_kube_context }}"
+        continuum_tenant_k8s_app_kubeconfig_user_copy: "{{ continuum_tenant_webots_kubeconfig_user_copy }}"
+        continuum_tenant_k8s_app_kubeconfig_user_path: "{{ continuum_tenant_webots_kubeconfig_user_path }}"
+        continuum_tenant_k8s_app_workspace_root: "{{ continuum_tenant_webots_workspace_root }}"
+        continuum_tenant_k8s_app_workspace: "{{ continuum_tenant_webots_workspace }}"
+        continuum_tenant_k8s_app_rollout_targets: "{{ continuum_tenant_webots_rollout_targets }}"
+        continuum_tenant_k8s_app_rollout_timeout_seconds: "{{ continuum_tenant_webots_rollout_timeout_seconds }}"
+        continuum_tenant_k8s_app_force_rollout_restart: "{{ (continuum_tenant_webots_build_image | bool) or ((continuum_tenant_webots_image_pull_policy | default('', true) | lower) == 'always') }}"
+        continuum_tenant_k8s_app_summary_service_name: "{{ continuum_tenant_webots_service_name }}"
+        continuum_tenant_k8s_app_service_name: "{{ continuum_tenant_webots_service_name }}"
+        continuum_tenant_k8s_app_create_ingress: "{{ continuum_tenant_webots_create_ingress }}"
+        continuum_tenant_k8s_app_ingress_hostname: "{{ continuum_tenant_webots_ingress_hostname }}"
+        continuum_tenant_k8s_app_ingress_class: "{{ continuum_tenant_webots_ingress_class }}"
+        continuum_tenant_k8s_app_ingress_backend_protocol: "{{ continuum_tenant_webots_ingress_backend_protocol }}"
+        continuum_tenant_k8s_app_ingress_ssl_redirect: "{{ continuum_tenant_webots_ingress_ssl_redirect }}"
+        continuum_tenant_k8s_app_ingress_force_ssl_redirect: "{{ continuum_tenant_webots_ingress_force_ssl_redirect }}"
+        continuum_tenant_k8s_app_ingress_service_name: "{{ continuum_tenant_webots_service_name }}"
+        continuum_tenant_k8s_app_ingress_service_port: "{{ continuum_tenant_webots_port }}"
+        continuum_tenant_k8s_app_enable_tls: "{{ continuum_tenant_webots_enable_tls }}"
+        continuum_tenant_k8s_app_tls_issuer: "{{ continuum_tenant_webots_tls_issuer }}"
+        continuum_tenant_k8s_app_ingress_tls_secret_name: "{{ continuum_tenant_webots_ingress_tls_secret_name }}"
+        continuum_tenant_k8s_app_register_dns: "{{ continuum_tenant_webots_register_dns }}"
+        continuum_tenant_k8s_app_dns_service_name: "{{ continuum_tenant_webots_dns_service_name }}"
+        continuum_tenant_k8s_app_dns_domain: "{{ continuum_tenant_webots_dns_domain }}"
+        continuum_tenant_k8s_app_dns_target_ip: "{{ continuum_tenant_webots_dns_target_ip }}"
+        continuum_tenant_k8s_app_dns_server: "{{ continuum_tenant_webots_dns_server }}"
+        continuum_tenant_k8s_app_dns_servers: "{{ continuum_tenant_webots_dns_servers }}"
+        continuum_tenant_k8s_app_labels_part_of: "webots"

@@ -1,0 +1,15 @@
+destroy table inet nm_webots
+add table inet nm_webots
+
+add set inet nm_webots stream_allow_v4 {
+  type ipv4_addr
+  flags interval
+  elements = { {{ simulation_environment_webots_stream_allowed_sources | join(', ') }} }
+}
+
+add chain inet nm_webots stream_guard {
+  type filter hook input priority -20; policy accept;
+}
+add rule inet nm_webots stream_guard iifname "lo" tcp dport {{ simulation_environment_webots_port }} accept
+add rule inet nm_webots stream_guard ip saddr @stream_allow_v4 tcp dport {{ simulation_environment_webots_port }} accept
+add rule inet nm_webots stream_guard tcp dport {{ simulation_environment_webots_port }} counter drop

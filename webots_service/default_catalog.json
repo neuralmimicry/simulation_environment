@@ -1,0 +1,14 @@
+[
+  {
+    "id": "shared-fleet",
+    "title": "AARNN Shared Ecology",
+    "summary": "A persistent shared habitat for the eight qc00–qc05 and sm00–sm01 AARNN robot slots.",
+    "description": "One continually running Webots world with generated terrain, orchard, freshwater stream, day/night and seasonal changes, and moving wildlife NPCs.",
+    "aliases": ["fleet", "shared", "shared-world", "shared_fleet", "aarnn"],
+    "world_path": "webots_world/worlds/shared_fleet_neuroworld.wbt",
+    "config_path": "webots_world/configs/config_celegans_webots.json",
+    "io_alignment_path": "webots_world/configs/config_celegans_webots.io_alignment.json",
+    "workspace_hint": "shared-aarnn-world",
+    "shared_world": true
+  }
+]

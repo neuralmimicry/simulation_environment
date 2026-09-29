@@ -1,0 +1,383 @@
+---
+- name: Check the Webots fleet hosts are x86_64 Linux systems
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] in ['x86_64', 'amd64']
+      - ansible_facts['system'] == 'Linux'
+    fail_msg: "The NeuralMimicry Webots deployment requires x86_64 Linux; {{ inventory_hostname }} reports {{ ansible_facts['system'] }} {{ ansible_facts['architecture'] }}."
+
+- name: Check the local simulation source tree
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_local_repo }}/webots_world/worlds/shared_fleet_neuroworld.wbt"
+  register: simulation_environment_webots_source_stat
+
+- name: Require the shared Webots world source
+  ansible.builtin.assert:
+    that:
+      - simulation_environment_webots_source_stat.stat.exists | default(false)
+    fail_msg: "Set SIMULATION_ENVIRONMENT_SRC to the simulation_environment checkout or run this play from that repository."
+
+- name: Check the reused AARNN device mapper header on the control node
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_local_aarnn_header }}"
+  register: simulation_environment_webots_aarnn_header_stat
+
+- name: Require the reused AARNN device mapper header
+  ansible.builtin.assert:
+    that:
+      - simulation_environment_webots_aarnn_header_stat.stat.exists | default(false)
+    fail_msg: "The AARNN device mapper header was not found at {{ simulation_environment_webots_local_aarnn_header }}."
+
+- name: Check the fleet hosts have the requested NVIDIA hardware
+  ansible.builtin.command:
+    argv:
+      - nvidia-smi
+      - --query-gpu=name,memory.total
+      - --format=csv,noheader
+  register: simulation_environment_webots_gpu
+  changed_when: false
+
+- name: Require an RTX 3060 with 12 GB VRAM on each Webots host
+  ansible.builtin.assert:
+    that:
+      - "'RTX 3060' in simulation_environment_webots_gpu.stdout"
+      - (simulation_environment_webots_gpu.stdout | regex_search('[0-9]+ MiB') | regex_replace(' MiB', '') | int) >= 11000
+    fail_msg: "{{ inventory_hostname }} must have an RTX 3060 with at least 11,000 MiB VRAM; found {{ simulation_environment_webots_gpu.stdout }}."
+
+- name: Check whether any fleet network bindings were requested
+  ansible.builtin.set_fact:
+    simulation_environment_webots_bindings_requested: >-
+      {{ (simulation_environment_webots_network_bindings | dict2items | selectattr('value.network_id', 'defined') | map(attribute='value.network_id') | map('string') | map('trim') | reject('equalto', '') | list | length) > 0 }}
+
+- name: Require the AARNN service token when network bindings are configured
+  no_log: true
+  ansible.builtin.assert:
+    that:
+      - not (simulation_environment_webots_bindings_requested | bool) or (simulation_environment_webots_access_token | trim | length > 0)
+    fail_msg: "The configured fleet network IDs require AARNN_WEBOTS_ACCESS_TOKEN with aarnn:use permission."
+
+- name: Require all eight network bindings when strict binding mode is enabled
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (simulation_environment_webots_require_network_bindings | bool)
+        or (
+          simulation_environment_webots_network_bindings
+          | dict2items
+          | selectattr('value.network_id', 'defined')
+          | map(attribute='value.network_id')
+          | map('string')
+          | map('trim')
+          | reject('equalto', '')
+          | list
+          | length == 8
+        )
+    fail_msg: "Strict mode requires a network_id for all eight AARNN robots."
+
+- name: Create the Webots service identity
+  ansible.builtin.user:
+    name: "{{ simulation_environment_webots_service_user }}"
+    home: "{{ simulation_environment_webots_home }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: true
+
+- name: Install Webots runtime and controller build dependencies
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - build-essential
+      - libcurl4-openssl-dev
+      - nlohmann-json3-dev
+      - nftables
+      - rsync
+      - xvfb
+      - xauth
+      - libgl1
+      - libegl1
+      - libx11-6
+      - libxrender1
+      - libxi6
+      - libxtst6
+      - libsndio7.0
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the Cyberbotics APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the official Cyberbotics APT signing key
+  ansible.builtin.get_url:
+    url: https://cyberbotics.com/Cyberbotics.asc
+    dest: /etc/apt/keyrings/Cyberbotics.asc
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+
+- name: Configure the official Webots APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/Cyberbotics.list
+    owner: root
+    group: root
+    mode: "0644"
+    content: "deb [arch=amd64 signed-by=/etc/apt/keyrings/Cyberbotics.asc] https://cyberbotics.com/debian binary-amd64/\n"
+
+- name: Install Webots from the signed Cyberbotics repository
+  ansible.builtin.apt:
+    name: "{{ simulation_environment_webots_package_name }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 0
+
+- name: Ensure the Webots installation is available at the configured path
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_home_dir }}/webots"
+  register: simulation_environment_webots_binary_stat
+
+- name: Assert that the Webots package installed the expected executable
+  ansible.builtin.assert:
+    that:
+      - simulation_environment_webots_binary_stat.stat.executable | default(false)
+    fail_msg: "Webots was installed, but {{ simulation_environment_webots_home_dir }}/webots is not executable. Set simulation_environment_webots_home_dir to the package install path."
+
+- name: Create runtime and configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(simulation_environment_webots_service_user) }}"
+    group: "{{ item.group | default(simulation_environment_webots_service_user) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ simulation_environment_webots_home }}", mode: "0750" }
+    - { path: "{{ simulation_environment_webots_state_dir }}", mode: "0750" }
+    - { path: "{{ simulation_environment_webots_config_dir }}", owner: root, group: "{{ simulation_environment_webots_service_user }}", mode: "0750" }
+    - { path: "{{ simulation_environment_webots_source_root }}", owner: "{{ ansible_user }}", group: "{{ ansible_user }}", mode: "0755" }
+
+- name: Create the reused AARNN include directory
+  ansible.builtin.file:
+    path: "{{ simulation_environment_webots_aarnn_header_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Prepare the Webots source tree for privileged synchronization
+  ansible.builtin.file:
+    path: "{{ simulation_environment_webots_repo_path }}"
+    state: directory
+    owner: "{{ simulation_environment_webots_service_user }}"
+    group: "{{ simulation_environment_webots_service_user }}"
+    mode: "0755"
+
+- name: Synchronize the simulation_environment repository to the Webots hosts
+  become: false
+  ansible.posix.synchronize:
+    src: "{{ simulation_environment_webots_local_repo }}/"
+    dest: "{{ simulation_environment_webots_repo_path }}/"
+    archive: true
+    delete: true
+    rsync_path: "sudo -n rsync"
+    rsync_opts:
+      - "--chown={{ simulation_environment_webots_service_user }}:{{ simulation_environment_webots_service_user }}"
+      - "--chmod=D0755"
+      - "--itemize-changes"
+      - "--exclude=.git"
+      - "--exclude=.idea"
+      - "--exclude=target"
+      - "--exclude=webots_world/controllers/*/build"
+      - "--exclude=webots_world/controllers/*/nm_api_robot_controller"
+      - "--exclude=webots_world/controllers/*/nm_ecology_supervisor"
+  register: simulation_environment_webots_sync
+  changed_when: >-
+    simulation_environment_webots_sync.stdout_lines | default([]) | length > 0
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Install the reused AARNN Webots device mapper header
+  ansible.builtin.copy:
+    src: "{{ simulation_environment_webots_local_aarnn_header }}"
+    dest: "{{ simulation_environment_webots_aarnn_header_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Compile the AARNN robot controller and persistent ecology supervisor
+  become_user: "{{ simulation_environment_webots_service_user }}"
+  ansible.builtin.command:
+    argv:
+      - make
+      - -C
+      - "{{ item }}"
+  environment:
+    HOME: "{{ simulation_environment_webots_home }}"
+    WEBOTS_HOME: "{{ simulation_environment_webots_home_dir }}"
+    AARNN_INCLUDE_ROOT: "{{ simulation_environment_webots_source_root }}/aarnn_rust/include"
+  loop:
+    - "{{ simulation_environment_webots_repo_path }}/webots_world/controllers/nm_api_robot_controller"
+    - "{{ simulation_environment_webots_repo_path }}/webots_world/controllers/nm_ecology_supervisor"
+  register: simulation_environment_webots_controller_build
+  changed_when: >-
+    '# compiling ' in (simulation_environment_webots_controller_build.stdout | default(''))
+    or '# linking ' in (simulation_environment_webots_controller_build.stdout | default(''))
+  when: simulation_environment_webots_build_controllers | bool
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Create the runtime resource links used by world snapshots
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+    owner: "{{ simulation_environment_webots_service_user }}"
+    group: "{{ simulation_environment_webots_service_user }}"
+    force: true
+  loop:
+    - { src: "{{ simulation_environment_webots_repo_path }}/webots_world/protos", dest: "{{ simulation_environment_webots_home }}/protos" }
+    - { src: "{{ simulation_environment_webots_repo_path }}/webots_world/controllers", dest: "{{ simulation_environment_webots_home }}/controllers" }
+
+- name: Render the protected Webots fleet configuration
+  ansible.builtin.template:
+    src: fleet.json.j2
+    dest: "{{ simulation_environment_webots_fleet_config }}"
+    owner: "{{ simulation_environment_webots_service_user }}"
+    group: "{{ simulation_environment_webots_service_user }}"
+    mode: "0640"
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Install the AARNN inference bearer token
+  no_log: true
+  ansible.builtin.copy:
+    content: "{{ simulation_environment_webots_access_token }}\n"
+    dest: "{{ simulation_environment_webots_access_token_file }}"
+    owner: "{{ simulation_environment_webots_service_user }}"
+    group: "{{ simulation_environment_webots_service_user }}"
+    mode: "0600"
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Install the persistent Webots world start script
+  ansible.builtin.copy:
+    src: start-world.sh
+    dest: "{{ simulation_environment_webots_runtime_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Configure the source world and stream port for the runtime launcher
+  ansible.builtin.copy:
+    dest: /etc/default/nm-webots-shared-world
+    owner: root
+    group: "{{ simulation_environment_webots_service_user }}"
+    mode: "0640"
+    content: |
+      NM_WEBOTS_SOURCE_WORLD_FILE={{ simulation_environment_webots_repo_path }}/webots_world/worlds/shared_fleet_neuroworld.wbt
+      NM_WEBOTS_STREAM_PORT={{ simulation_environment_webots_port }}
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Create the nftables include directory
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install allowlisted Webots W3D stream firewall rules
+  ansible.builtin.template:
+    src: nm-webots-stream.nft.j2
+    dest: /etc/nftables.d/nm-webots-stream.nft
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply the Webots stream firewall
+
+- name: Validate the Webots stream firewall rules
+  ansible.builtin.command:
+    argv:
+      - nft
+      - --check
+      - --file
+      - /etc/nftables.d/nm-webots-stream.nft
+  changed_when: false
+
+- name: Install the Webots firewall loader
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/nm-webots-stream-firewall
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+      exec /usr/sbin/nft -f /etc/nftables.d/nm-webots-stream.nft
+
+- name: Install the persistent Webots firewall systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nm-webots-stream-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Restrict NeuralMimicry Webots streaming to the authenticated ingress
+      Wants=network-pre.target
+      After=local-fs.target nftables.service
+      Before={{ simulation_environment_webots_runtime_service }}
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/nm-webots-stream-firewall
+      ExecReload=/usr/local/sbin/nm-webots-stream-firewall
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Apply the Webots stream firewall
+
+- name: Install the persistent Webots systemd unit
+  ansible.builtin.template:
+    src: nm-webots-shared-world.service.j2
+    dest: "/etc/systemd/system/{{ simulation_environment_webots_runtime_service }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Apply pending Webots runtime and firewall updates before startup checks
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the persistent Webots world only on the primary stream host
+  ansible.builtin.systemd:
+    name: "{{ simulation_environment_webots_runtime_service }}"
+    enabled: "{{ inventory_hostname == simulation_environment_webots_primary_host }}"
+    state: "{{ 'started' if inventory_hostname == simulation_environment_webots_primary_host else 'stopped' }}"
+    daemon_reload: true
+
+- name: Check Webots is listening for W3D streaming on the primary host
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ simulation_environment_webots_port }}"
+    state: started
+    timeout: 600
+  when: inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Check that the systemd service is active on the primary host
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - "{{ simulation_environment_webots_runtime_service }}"
+  register: simulation_environment_webots_service_status
+  changed_when: false
+  when: inventory_hostname == simulation_environment_webots_primary_host

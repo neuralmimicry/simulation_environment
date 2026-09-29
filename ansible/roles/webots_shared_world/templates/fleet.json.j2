@@ -1,0 +1,18 @@
+{
+  "api_base": {{ simulation_environment_webots_api_base | to_json }},
+  "access_token_file": {{ simulation_environment_webots_access_token_file | to_json }},
+  "inference_interval_ms": 200,
+  "output_hold_ms": 350,
+  "robots": {
+{% for robot_name, binding in (simulation_environment_webots_network_bindings | dictsort) %}
+    {{ robot_name | to_json }}: {
+      "network_id": {{ binding.network_id | default('') | to_json }},
+      "node_id": {{ binding.node_id | default('') | to_json }},
+      "sensor_regex": {{ binding.sensor_regex | default('^celegans_s_.*$') | to_json }},
+      "actuator_regex": {{ binding.actuator_regex | default('^celegans_o_.*$') | to_json }},
+      "expected_sensory": {{ binding.expected_sensory | default(24) | int }},
+      "expected_outputs": {{ binding.expected_outputs | default(96) | int }}
+    }{{ "," if not loop.last else "" }}
+{% endfor %}
+  }
+}

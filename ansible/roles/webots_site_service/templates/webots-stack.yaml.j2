@@ -1,0 +1,250 @@
+{% set registry_secret_create_enabled = continuum_tenant_webots_registry_secret_create_enabled_effective | default(false) %}
+{% set registry_secret_sync_enabled = continuum_tenant_webots_registry_secret_sync_enabled_effective | default(false) %}
+{% set image_pull_secret_enabled = continuum_tenant_webots_registry_secret_enabled_effective | default(false) %}
+{% set node_pinned = continuum_tenant_webots_node_name | default('') | trim | length > 0 %}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ continuum_tenant_webots_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+    app.kubernetes.io/part-of: webots
+---
+{% if registry_secret_create_enabled %}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ continuum_tenant_webots_registry_secret_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: |
+    {"auths":{"{{ continuum_tenant_webots_registry_server }}":{"username":"{{ continuum_tenant_webots_registry_username }}","password":"{{ continuum_tenant_webots_registry_password }}","auth":"{{ (continuum_tenant_webots_registry_username ~ ':' ~ continuum_tenant_webots_registry_password) | b64encode }}"}}}
+---
+{% elif registry_secret_sync_enabled %}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ continuum_tenant_webots_registry_secret_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ continuum_tenant_webots_registry_secret_dockerconfigjson_effective | string | to_json }}
+---
+{% endif %}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ continuum_tenant_webots_name }}-runtime
+  namespace: {{ continuum_tenant_webots_namespace }}
+type: Opaque
+stringData:
+  secret_key: {{ continuum_tenant_webots_secret_key_effective | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ continuum_tenant_webots_service_account_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+    app.kubernetes.io/part-of: webots
+{% if image_pull_secret_enabled %}
+imagePullSecrets:
+  - name: {{ continuum_tenant_webots_registry_secret_name }}
+{% endif %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ continuum_tenant_webots_service_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: {{ continuum_tenant_webots_port | int }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ continuum_tenant_webots_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ continuum_tenant_webots_replicas_effective | int }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: {{ continuum_tenant_webots_service_account_name }}
+{% if image_pull_secret_enabled %}
+      imagePullSecrets:
+        - name: {{ continuum_tenant_webots_registry_secret_name }}
+{% endif %}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+{% if node_pinned or (continuum_tenant_webots_node_selector | default({}) | length > 0) %}
+      nodeSelector:
+{% if node_pinned %}
+        kubernetes.io/hostname: {{ continuum_tenant_webots_node_name | quote }}
+{% endif %}
+{% for item in (continuum_tenant_webots_node_selector | default({}) | dictsort) %}
+        {{ item.0 }}: {{ item.1 | quote }}
+{% endfor %}
+{% endif %}
+      containers:
+        - name: webots
+          image: {{ continuum_tenant_webots_image_effective | quote }}
+          imagePullPolicy: {{ continuum_tenant_webots_image_pull_policy | quote }}
+          ports:
+            - name: http
+              containerPort: {{ continuum_tenant_webots_port | int }}
+          env:
+            - name: WEBOTS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ continuum_tenant_webots_name }}-runtime
+                  key: secret_key
+{% for item in continuum_tenant_webots_env_items %}
+            - name: {{ item.key }}
+              value: {{ item.value | string | to_json }}
+{% endfor %}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+{% for item in (continuum_tenant_webots_resources.requests | default({}) | dictsort) %}
+              {{ item.0 }}: {{ item.1 | quote }}
+{% endfor %}
+            limits:
+{% for item in (continuum_tenant_webots_resources.limits | default({}) | dictsort) %}
+              {{ item.0 }}: {{ item.1 | quote }}
+{% endfor %}
+---
+{% if continuum_tenant_webots_hpa_enable | bool %}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ continuum_tenant_webots_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ continuum_tenant_webots_name }}
+  minReplicas: {{ continuum_tenant_webots_hpa_min_replicas | int }}
+  maxReplicas: {{ continuum_tenant_webots_hpa_max_replicas | int }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ continuum_tenant_webots_hpa_cpu_utilization | int }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ continuum_tenant_webots_hpa_memory_utilization | int }}
+---
+{% endif %}
+{% if continuum_tenant_webots_stream_enable | bool %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ continuum_tenant_webots_stream_service_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ continuum_tenant_webots_name }}
+    app.kubernetes.io/component: stream
+spec:
+  ports:
+    - name: w3d
+      port: {{ continuum_tenant_webots_stream_port | int }}
+      targetPort: {{ continuum_tenant_webots_stream_port | int }}
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: {{ continuum_tenant_webots_stream_service_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+subsets:
+  - addresses:
+      - ip: {{ continuum_tenant_webots_stream_host_ip | quote }}
+    ports:
+      - name: w3d
+        port: {{ continuum_tenant_webots_stream_port | int }}
+        protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ continuum_tenant_webots_stream_ingress_name }}
+  namespace: {{ continuum_tenant_webots_namespace }}
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: {{ continuum_tenant_webots_stream_auth_url | quote }}
+    nginx.ingress.kubernetes.io/auth-method: "GET"
+    nginx.ingress.kubernetes.io/auth-response-headers: ""
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ continuum_tenant_webots_stream_proxy_timeout | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ continuum_tenant_webots_stream_proxy_timeout | quote }}
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/rewrite-target: "/"
+spec:
+  ingressClassName: {{ continuum_tenant_webots_ingress_class }}
+{% if continuum_tenant_webots_enable_tls | bool %}
+  tls:
+    - hosts:
+        - {{ continuum_tenant_webots_ingress_hostname }}
+      secretName: {{ continuum_tenant_webots_ingress_tls_secret_name }}
+{% endif %}
+  rules:
+    - host: {{ continuum_tenant_webots_ingress_hostname }}
+      http:
+        paths:
+          - path: {{ continuum_tenant_webots_stream_path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ continuum_tenant_webots_stream_service_name }}
+                port:
+                  number: {{ continuum_tenant_webots_stream_port | int }}
+{% endif %}

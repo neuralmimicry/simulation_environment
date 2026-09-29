@@ -1,0 +1,6 @@
+---
+- name: Install the persistent NeuralMimicry Webots fleet world
+  hosts: webots_fleet
+  become: true
+  roles:
+    - webots_shared_world
