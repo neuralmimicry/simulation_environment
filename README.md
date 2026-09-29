@@ -45,12 +45,15 @@ using the configurable `simulation_environment_webots_input_spike_threshold`
 (default `0.5`). This avoids downloading full AARNN snapshots just to encode
 each frame, which can exceed the API's 64 MiB shard snapshot limit.
 The bridge sends frames through `/api/aer/inject` and reads motor activity from
-`/api/activity`, using `simulation_environment_webots_activity_addr` as the
-direct target for both calls. If the node is unavailable, activity polling
-falls back to the API's normal cluster discovery and follows the returned
-activity source. Addressing the worker directly avoids an orchestrator hop for
-each input frame; using `/api/aer/infer` would also wait for output on every
-request.
+`/api/activity`. Sensory frames omit a worker address so the orchestrator can
+select the current sensory bridge and preserve cluster fan-out. Activity reads
+also use API placement discovery instead of pinning a worker that may be a
+backup shard or become stale after a placement change. The `/api/aer/infer`
+route waits for fresh output on each request, so the persistent controller
+keeps input admission and activity polling separate. Each controller process
+uses a distinct `session_id` with its monotonically increasing Webots step so
+retries remain idempotent and a restarted simulation cannot reuse an earlier
+frame identity.
 The role checks that bound deployments have a token and installs it with
 owner-only permissions on both fleet hosts. Keep token values out of version
 control.

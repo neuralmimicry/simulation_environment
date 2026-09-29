@@ -65,6 +65,20 @@ std::string env_or(const char *key, const char *fallback) {
   return value && *value ? value : fallback;
 }
 
+std::string make_session_id(const std::string &robot_name) {
+  std::string safe_name;
+  safe_name.reserve(std::min<std::size_t>(robot_name.size(), 48));
+  for (const unsigned char ch : robot_name) {
+    if (safe_name.size() == 48)
+      break;
+    safe_name.push_back(std::isalnum(ch) || ch == '-' || ch == '_' ? ch : '-');
+  }
+  if (safe_name.empty())
+    safe_name = "robot";
+  const auto epoch = std::chrono::steady_clock::now().time_since_epoch().count();
+  return "webots-" + safe_name + "-" + std::to_string(epoch);
+}
+
 size_t append_response(char *data, size_t size, size_t count, void *opaque) {
   const auto bytes = size * count;
   static_cast<std::string *>(opaque)->append(data, bytes);
@@ -88,7 +102,10 @@ HttpResult perform_http(CURL *curl, const std::string &url,
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_response);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
+  // The admission path can wait for the previous bounded sensory slot to be
+  // consumed by a busy executor. Simulation stepping remains independent on
+  // this worker thread, and the pending-frame queue stays size one.
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 25000L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   if (post_body) {
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -118,6 +135,7 @@ class InferenceWorker {
         token_(std::move(token)),
         network_id_(std::move(network_id)),
         robot_name_(std::move(robot_name)),
+        session_id_(make_session_id(robot_name_)),
         actuator_count_(actuator_count),
         input_spike_threshold_(std::isfinite(input_spike_threshold)
                                    ? std::clamp(input_spike_threshold, 0.0f, 1.0f)
@@ -160,6 +178,7 @@ class InferenceWorker {
   std::string token_;
   std::string network_id_;
   std::string robot_name_;
+  std::string session_id_;
   std::size_t actuator_count_;
   float input_spike_threshold_;
   std::uint64_t last_activity_step_ = 0;
@@ -175,9 +194,9 @@ class InferenceWorker {
 
   bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result,
              double &request_ms, long &new_connections) {
-    // Inject sensory spikes without asking the orchestrator to rediscover the
-    // active node, then read current activity through a direct cluster node.
-    // /api/aer/infer repeats discovery and can wait five seconds for output.
+    // Leave the injection address unset so the orchestrator can choose the
+    // current sensory bridge and preserve cluster fan-out. A configured worker
+    // address may be a backup or become stale after a placement change.
     std::vector<std::uint32_t> input_spike_indices;
     input_spike_indices.reserve(frame.values.size());
     for (std::size_t i = 0; i < frame.values.size(); ++i) {
@@ -187,13 +206,12 @@ class InferenceWorker {
     }
 
     json request = {{"network_id", network_id_},
+                    {"session_id", session_id_},
                     {"step_index", frame.step},
                     {"time_ms", frame.time_ms},
                     {"dt_ms", frame.dt_ms},
                     {"aer_base", 0},
                     {"spike_indices", input_spike_indices}};
-    if (!activity_addr_.empty())
-      request["addr"] = activity_addr_;
     const std::string body = request.dump();
     request_ms = 0.0;
     new_connections = 0;
@@ -288,9 +306,6 @@ class InferenceWorker {
       }
       last_activity_step_ = sim_step;
       has_last_activity_step_ = true;
-      const std::string source = parsed.value("source", std::string{});
-      if (!source.empty())
-        activity_addr_ = source;
       return true;
     } catch (const std::exception &error) {
       std::cerr << "[nm_api_robot] invalid activity response robot=" << robot_name_

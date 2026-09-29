@@ -72,7 +72,7 @@ simulation_environment_webots_network_bindings:
     expected_sensory: 32
     expected_outputs: 16
 
-# Address the live AARNN worker directly for both sensory injection and
-# activity reads; the public infer route performs discovery and waits for
-# output on each Webots frame.
-simulation_environment_webots_activity_addr: "192.168.1.62:50051"
+# Let the AARNN API resolve a live activity source from current placement.
+# Fixed worker addresses can point at a backup shard or become stale after a
+# placement change. Sensory injection always goes through the orchestrator.
+simulation_environment_webots_activity_addr: ""
