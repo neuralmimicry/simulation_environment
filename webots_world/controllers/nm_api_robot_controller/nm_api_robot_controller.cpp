@@ -127,7 +127,8 @@ class InferenceWorker {
   bool outputs_pending_ = false;
   std::thread thread_;
 
-  bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result) {
+  bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result,
+             double &request_ms, long &new_connections) {
     // Reuse this worker's easy handle and connection cache. Rebuilding the
     // handle for each frame forced a fresh TLS connection on every inference.
     std::vector<std::uint32_t> input_spike_indices;
@@ -165,6 +166,11 @@ class InferenceWorker {
     const CURLcode code = curl_easy_perform(curl);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    double total_time_seconds = 0.0;
+    curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME, &total_time_seconds);
+    request_ms = total_time_seconds * 1000.0;
+    new_connections = 0;
+    curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &new_connections);
     // Clear borrowed request pointers before their backing strings and header
     // list go out of scope. curl_easy_reset preserves the live connection cache.
     curl_easy_reset(curl);
@@ -176,7 +182,9 @@ class InferenceWorker {
         response.resize(max_error_body);
       std::cerr << "[nm_api_robot] infer request failed robot=" << robot_name_
                 << " network=" << network_id_ << " step=" << frame.step << " reason="
-                << (code == CURLE_OK ? "HTTP " + std::to_string(status) : curl_easy_strerror(code));
+                << (code == CURLE_OK ? "HTTP " + std::to_string(status) : curl_easy_strerror(code))
+                << " request_ms=" << static_cast<long>(request_ms)
+                << " new_connections=" << new_connections;
       if (!response.empty())
         std::cerr << " response=" << response << (body_truncated ? "...[truncated]" : "");
       std::cerr << std::endl;
@@ -220,7 +228,9 @@ class InferenceWorker {
         has_pending_ = false;
       }
       std::vector<std::uint32_t> next_outputs;
-      if (infer(curl, frame, next_outputs)) {
+      double request_ms = 0.0;
+      long new_connections = 0;
+      if (infer(curl, frame, next_outputs, request_ms, new_connections)) {
         const auto mapped_outputs = static_cast<std::size_t>(std::count_if(
             next_outputs.begin(), next_outputs.end(),
             [this](std::uint32_t index) { return index < actuator_count_; }));
@@ -242,7 +252,9 @@ class InferenceWorker {
                              return std::isfinite(value) && value >= input_spike_threshold_;
                            })
                     << " output_spikes=" << next_outputs.size()
-                    << " mapped_actuators=" << mapped_outputs << std::endl;
+                    << " mapped_actuators=" << mapped_outputs
+                    << " request_ms=" << static_cast<long>(request_ms)
+                    << " new_connections=" << new_connections << std::endl;
           next_status_log = now + std::chrono::seconds(30);
         }
         consecutive_failures = 0;
