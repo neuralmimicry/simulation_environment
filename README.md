@@ -56,10 +56,11 @@ route waits for fresh output on each request, so the persistent controller
 keeps input admission and activity polling separate. Each controller process
 uses a distinct `session_id`; its sensory frame sequence and timestamp derive
 from the common Webots world clock, restored from the persisted ecology clock
-after a simulator restart. Network inference latency therefore changes when
-an action arrives, but does not give one robot or neural network an independent
-simulation clock; the world and every robot continue advancing together while
-inference runs.
+after a simulator restart. AARNN inference runs asynchronously per network, so
+different calculation latencies change when each action arrives without
+changing the shared Webots world clock. Every robot and the ecology continue
+advancing together while inference runs; each action takes effect when its
+network result is ready.
 The role checks that bound deployments have a token and installs it with
 owner-only permissions on both fleet hosts. Keep token values out of version
 control.
@@ -76,7 +77,7 @@ host:
 AARNN_RUST_SRC=/path/to/aarnn_rust-webots-api-ingress-worktree
 cd "$AARNN_RUST_SRC"
 CARGO_TARGET_DIR=/path/to/x86_64-target \
-  cargo build --locked --release --bin aarnn_rust --features node_workload
+  cargo build --locked --release --bin aarnn_rust --features node_workload,cuda
 ```
 
 Build the AArch64 artifact natively on an AArch64 host (the active `qc02`–
@@ -89,6 +90,13 @@ CARGO_TARGET_DIR=/path/to/aarch64-target \
   cargo build --locked --release --target aarch64-unknown-linux-gnu \
     --bin aarnn_rust --features node_workload
 ```
+
+The x86-64 artifact is shared by `sm00` and `sm01`, both of which have RTX
+3060 GPUs. Include the `cuda` feature or the worker will report that CUDA was
+not compiled and run neural computation on the CPU. The ARM workers currently
+use the CPU/OpenCL profile. After installation, check the worker journal for a
+`[compute.cuda]` or `[compute.opencl] backend_initialized=1` line and verify
+GPU use with `nvidia-smi` on the native hosts.
 
 Pass both executable paths to the serial worker rollout:
 
