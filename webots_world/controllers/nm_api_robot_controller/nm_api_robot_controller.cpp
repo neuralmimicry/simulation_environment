@@ -60,6 +60,16 @@ std::string read_file(const std::string &path) {
   return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
+double load_world_elapsed_seconds(const std::string &world_path) {
+  if (world_path.empty())
+    return 0.0;
+  std::ifstream input(world_path + ".clock");
+  double elapsed = 0.0;
+  if (input >> elapsed && std::isfinite(elapsed) && elapsed > 0.0)
+    return elapsed;
+  return 0.0;
+}
+
 std::string env_or(const char *key, const char *fallback) {
   const char *value = std::getenv(key);
   return value && *value ? value : fallback;
@@ -405,6 +415,8 @@ Binding load_binding(const json &config, const std::string &robot_name) {
 int main() {
   Robot robot;
   const int timestep = static_cast<int>(robot.getBasicTimeStep());
+  const double world_elapsed_before_start = load_world_elapsed_seconds(
+      env_or("NM_WEBOTS_RUNTIME_WORLD_FILE", ""));
   DeviceMapper mapper;
   mapper.discover(robot, timestep);
 
@@ -485,7 +497,10 @@ int main() {
       if (now >= next_inference) {
         Frame frame;
         frame.step = step_index;
-        frame.time_ms = robot.getTime() * 1000.0;
+        // Webots supplies one simulation clock to every robot and the ecology
+        // supervisor. Restore the persisted epoch so a simulator restart does
+        // not move sensory timestamps backwards relative to the living network.
+        frame.time_ms = (world_elapsed_before_start + robot.getTime()) * 1000.0;
         frame.dt_ms = timestep;
         frame.values.reserve(sensor_indices.size());
         for (int index : sensor_indices)
