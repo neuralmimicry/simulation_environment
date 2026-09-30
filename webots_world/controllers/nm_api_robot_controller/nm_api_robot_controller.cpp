@@ -369,7 +369,7 @@ class InferenceWorker {
                 << " network=" << network_id_ << " step=" << frame.step
                 << " reason=" << error.what() << "\n";
       // The sensory frame was admitted; a malformed optional projection must
-      // not cause the next controller pass to resubmit stale sensory data.
+      // not trigger exponential backoff for later controller frames.
       return true;
     }
   }

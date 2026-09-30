@@ -62,8 +62,8 @@ select the current sensory bridge and preserve cluster fan-out. Activity reads
 also use API placement discovery instead of pinning a worker that may be a
 backup shard or become stale after a placement change. Busy activity reads
 are retryable and are not evidence that the network produced no output. Once
-sensory admission succeeds, an unavailable activity projection does not cause
-that frame to be resubmitted or put the network into input backoff; the
+sensory admission succeeds, an unavailable activity projection does not turn
+that accepted frame into an input failure or back off later frames; the
 controller retains only its existing motor hold and checks activity on a later
 sample. Each controller process uses a distinct `session_id`; its sensory
 frame sequence and timestamp derive from the common Webots world clock,
