@@ -285,7 +285,7 @@ class InferenceWorker {
     };
 
     const HttpResult injection =
-        perform_authenticated_http(curl, api_base_ + "/aer/inject", &body);
+        perform_authenticated_http(curl, api_base_ + "/simulation/aer/inject", &body);
     account_request(injection);
     if (injection.code != CURLE_OK || injection.status < 200 || injection.status >= 300) {
       log_http_failure("inject", injection);

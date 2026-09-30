@@ -67,6 +67,8 @@ simulation_environment_webots_peripheral_input_grants:
     - webots
   tenant-aarnn:
     - webots
+simulation_environment_webots_simulation_ingress_principals:
+  - webots
 
 simulation_environment_webots_aarnn_namespace: aarnn
 simulation_environment_webots_aarnn_bearer_secret: nm-webots-sensory-ingress

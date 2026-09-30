@@ -56,11 +56,16 @@ bridge converts normalized sensor readings to raw AER spike indices locally,
 using the configurable `simulation_environment_webots_input_spike_threshold`
 (default `0.5`). This avoids downloading full AARNN snapshots just to encode
 each frame, which can exceed the API's 64 MiB shard snapshot limit.
-The bridge sends frames through `/api/aer/inject` and reads motor activity from
-`/api/activity`. Sensory frames omit a worker address so the orchestrator can
-select the current sensory bridge and preserve cluster fan-out. Activity reads
-also use API placement discovery instead of pinning a worker that may be a
-backup shard or become stale after a placement change. Busy activity reads
+The bridge sends virtual-world frames through `/api/simulation/aer/inject` and
+reads motor activity from `/api/activity`. This server-managed route requires
+the allow-listed `webots` service identity, `aarnn:use`, and the existing exact
+network-scoped `PeripheralInput` grant. It is separate from workstation
+`/api/aer/inject`, which still requires a locally consented short-lived
+PeripheralSession. No browser session or local device is needed to keep the
+Webots world running. Sensory frames omit a worker address so the orchestrator
+can select the current sensory bridge and preserve cluster fan-out. Activity
+reads also use API placement discovery instead of pinning a worker that may be
+a backup shard or become stale after a placement change. Busy activity reads
 are retryable and are not evidence that the network produced no output. Once
 sensory admission succeeds, an unavailable activity projection does not turn
 that accepted frame into an input failure or back off later frames; the

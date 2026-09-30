@@ -35,6 +35,8 @@
                         key: NM_ORCHESTRATOR_BEARER_TOKEN
                   - name: NM_PERIPHERAL_INPUT_GRANTS_JSON
                     value: "{{ simulation_environment_webots_peripheral_input_grants | to_json }}"
+                  - name: NM_SIMULATION_INGRESS_PRINCIPALS
+                    value: "{{ simulation_environment_webots_simulation_ingress_principals | join(',') }}"
     simulation_environment_webots_aarnn_engine_patch:
       spec:
         template:
@@ -66,6 +68,50 @@
               | length
             ) == 0
         fail_msg: "AARNN peripheral-input grants must target configured Webots network IDs only."
+      tags: [webots_ingress_config]
+
+    - name: Check each managed simulation identity has an exact network input grant
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_simulation_ingress_principals is sequence
+          - simulation_environment_webots_simulation_ingress_principals is not string
+          - simulation_environment_webots_simulation_ingress_principals | length > 0
+          - >-
+            (
+              simulation_environment_webots_simulation_ingress_principals
+              | difference(
+                  simulation_environment_webots_peripheral_input_grants.values()
+                  | flatten
+                  | unique
+                  | list
+                )
+              | length
+            ) == 0
+        fail_msg: "Managed simulation principals must have an exact configured PeripheralInput grant."
+      tags: [webots_ingress_config]
+
+    - name: Check every managed simulation identity is granted each embodied network
+      ansible.builtin.assert:
+        that:
+          - item.0 in simulation_environment_webots_peripheral_input_grants[item.1]
+        fail_msg: "Simulation identity {{ item.0 }} lacks a brain-scoped PeripheralInput grant for {{ item.1 }}."
+      loop: >-
+        {{
+          simulation_environment_webots_simulation_ingress_principals
+          | product(
+              simulation_environment_webots_network_bindings
+              | dict2items
+              | selectattr('value.network_id', 'defined')
+              | map(attribute='value.network_id')
+              | map('string')
+              | map('trim')
+              | reject('equalto', '')
+              | unique
+              | list
+            )
+          | list
+        }}
+      tags: [webots_ingress_config]
 
     - name: Create the protected AARNN bearer-token directory
       ansible.builtin.file:
