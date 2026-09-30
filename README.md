@@ -65,10 +65,12 @@ Before enabling those robot bindings, build and import the AARNN branch images
 specified in `ansible/vars/neuralmimicry-site.yml` on the QC workers. The
 bounded sensory Prepare/Commit RPCs also need to be installed on the native
 workers that may own a network's sensory layer. Build the x86-64 binary from
-the pinned AARNN branch and roll active bridge workers serially:
+an `aarnn_rust` worktree checked out to `codex/webots-api-ingress-20260929`,
+then roll active bridge workers serially:
 
 ```sh
-cd /home/pbisaacs/Developer/neuralmimicry/aarnn_rust
+AARNN_RUST_SRC=/path/to/aarnn_rust-webots-api-ingress-worktree
+cd "$AARNN_RUST_SRC"
 CARGO_TARGET_DIR=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target \
   cargo build --locked --release --bin aarnn_rust --features node_workload
 cd /home/pbisaacs/Developer/neuralmimicry/simulation_environment/ansible

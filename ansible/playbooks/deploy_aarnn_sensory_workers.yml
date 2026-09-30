@@ -23,6 +23,7 @@
       ansible.builtin.stat:
         path: "{{ simulation_environment_aarnn_node_binary_source }}"
       delegate_to: localhost
+      become: false
       run_once: true
       register: simulation_environment_aarnn_node_binary_stat
 
@@ -41,6 +42,7 @@
           - --brief
           - "{{ simulation_environment_aarnn_node_binary_source }}"
       delegate_to: localhost
+      become: false
       run_once: true
       register: simulation_environment_aarnn_node_binary_type
       changed_when: false
