@@ -208,6 +208,7 @@
       - "--itemize-changes"
       - "--exclude=.git"
       - "--exclude=.idea"
+      - "--exclude=**/.secrets/***"
       - "--exclude=target"
       - "--exclude=webots_world/controllers/*/build"
       - "--exclude=webots_world/controllers/*/nm_api_robot_controller"
