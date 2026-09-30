@@ -84,15 +84,75 @@
     - name: Require a supported native worker architecture
       ansible.builtin.assert:
         that:
-          - ansible_architecture in ['x86_64', 'aarch64']
+          - ansible_facts['architecture'] in ['x86_64', 'aarch64']
         fail_msg: "No AARNN sensory worker binary is configured for this host architecture."
 
     - name: Select the worker binary matching this host architecture
       ansible.builtin.set_fact:
         simulation_environment_aarnn_node_binary_source: >-
           {{ simulation_environment_aarnn_node_binary_source_aarch64
-             if ansible_architecture == 'aarch64'
+             if ansible_facts['architecture'] == 'aarch64'
              else simulation_environment_aarnn_node_binary_source_x86_64 }}
+
+    - name: Enable Ubuntu 24.04 compatibility packages for the OpenCV 4.6 x86-64 worker
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/aarnn-opencv-compat.sources
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: http://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: http://security.ubuntu.com/ubuntu
+          Suites: noble-security
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+      when:
+        - ansible_facts['architecture'] == 'x86_64'
+        - ansible_facts['distribution_release'] == 'resolute'
+      register: simulation_environment_aarnn_opencv_compat_source
+
+    - name: Refresh APT after enabling Ubuntu 24.04 OpenCV compatibility packages
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+      when:
+        - ansible_facts['architecture'] == 'x86_64'
+        - ansible_facts['distribution_release'] == 'resolute'
+        - simulation_environment_aarnn_opencv_compat_source.changed | default(false)
+
+    - name: Install OpenCV 4.6 video I/O runtime for x86-64 workers
+      ansible.builtin.apt:
+        name: libopencv-videoio406t64
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['architecture'] == 'x86_64'
+
+    - name: Verify the OpenCV 4.6 video I/O runtime is installed
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - --show
+          - --showformat=${Status} ${Version}
+          - libopencv-videoio406t64
+      register: simulation_environment_aarnn_opencv_videoio
+      changed_when: false
+      when: ansible_facts['architecture'] == 'x86_64'
+
+    - name: Require the OpenCV 4.6 video I/O package status
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_opencv_videoio.stdout is search('install ok installed 4[.]6[.]0')
+        fail_msg: "{{ inventory_hostname }} does not have the OpenCV 4.6 video I/O runtime required by the x86-64 worker binary."
+      when: ansible_facts['architecture'] == 'x86_64'
 
   tasks:
     - name: Require the native worker service to be active before replacement
@@ -149,7 +209,7 @@
       ansible.builtin.copy:
         src: "{{ simulation_environment_aarnn_node_binary_path }}"
         dest: >-
-          /usr/local/lib/neuralmimicry/rollback/aarnn_rust.{{ ansible_date_time.iso8601_basic_short }}
+          /usr/local/lib/neuralmimicry/rollback/aarnn_rust.{{ ansible_facts['date_time']['iso8601_basic_short'] }}
         remote_src: true
         owner: root
         group: root
