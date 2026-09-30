@@ -487,20 +487,24 @@ int main() {
   std::vector<float> all_sensors(static_cast<std::size_t>(mapper.get_sensory_size()));
   std::vector<float> all_actuators(static_cast<std::size_t>(mapper.get_output_size()), 0.5f);
   std::vector<std::chrono::steady_clock::time_point> output_until(actuator_indices.size());
-  std::uint64_t step_index = 0;
 
   while (robot.step(timestep) != -1) {
-    ++step_index;
     if (worker) {
       mapper.fill_sensors(all_sensors);
       const auto now = std::chrono::steady_clock::now();
       if (now >= next_inference) {
+        const double world_time_ms =
+            (world_elapsed_before_start + robot.getTime()) * 1000.0;
+        const auto world_step = std::llround(world_time_ms / static_cast<double>(timestep));
         Frame frame;
-        frame.step = step_index;
+        // Sparse AARNN ingress sequences frames by step_index. Derive it from
+        // the shared, persisted world clock instead of advancing a private
+        // controller counter, so every network sees the same world timeline.
+        frame.step = world_step > 0 ? static_cast<std::uint64_t>(world_step) : 0;
         // Webots supplies one simulation clock to every robot and the ecology
         // supervisor. Restore the persisted epoch so a simulator restart does
         // not move sensory timestamps backwards relative to the living network.
-        frame.time_ms = (world_elapsed_before_start + robot.getTime()) * 1000.0;
+        frame.time_ms = world_time_ms;
         frame.dt_ms = timestep;
         frame.values.reserve(sensor_indices.size());
         for (int index : sensor_indices)

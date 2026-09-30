@@ -54,13 +54,12 @@ also use API placement discovery instead of pinning a worker that may be a
 backup shard or become stale after a placement change. The `/api/aer/infer`
 route waits for fresh output on each request, so the persistent controller
 keeps input admission and activity polling separate. Each controller process
-uses a distinct `session_id` with its monotonically increasing Webots step so
-retries remain idempotent and a restarted simulation cannot reuse an earlier
-frame identity. Every robot's sensory event timestamp comes from Webots'
-single world clock, restored from the persisted ecology clock after a simulator
-restart. Network inference latency therefore changes when an action arrives,
-but does not give one robot or neural network an independent simulation clock;
-the world and every robot continue advancing together while inference runs.
+uses a distinct `session_id`; its sensory frame sequence and timestamp derive
+from the common Webots world clock, restored from the persisted ecology clock
+after a simulator restart. Network inference latency therefore changes when
+an action arrives, but does not give one robot or neural network an independent
+simulation clock; the world and every robot continue advancing together while
+inference runs.
 The role checks that bound deployments have a token and installs it with
 owner-only permissions on both fleet hosts. Keep token values out of version
 control.
