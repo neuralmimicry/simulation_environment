@@ -64,25 +64,44 @@ control.
 Before enabling those robot bindings, build and import the AARNN branch images
 specified in `ansible/vars/neuralmimicry-site.yml` on the QC workers. The
 bounded sensory Prepare/Commit RPCs also need to be installed on the native
-workers that may own a network's sensory layer. Build the x86-64 binary from
-an `aarnn_rust` worktree checked out to `codex/webots-api-ingress-20260929`,
-then roll active bridge workers serially:
+workers that may own a network's sensory layer. Build one release executable
+for each active worker architecture from an `aarnn_rust` worktree checked out to
+`codex/webots-api-ingress-20260929`. Build the x86-64 artifact on an x86-64
+host:
 
 ```sh
 AARNN_RUST_SRC=/path/to/aarnn_rust-webots-api-ingress-worktree
 cd "$AARNN_RUST_SRC"
-CARGO_TARGET_DIR=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target \
+CARGO_TARGET_DIR=/path/to/x86_64-target \
   cargo build --locked --release --bin aarnn_rust --features node_workload
+```
+
+Build the AArch64 artifact natively on an AArch64 host (the active `qc02`–
+`qc04` workers use this architecture):
+
+```sh
+cd "$AARNN_RUST_SRC"
+CARGO_TARGET_DIR=/path/to/aarch64-target \
+  cargo build --locked --release --target aarch64-unknown-linux-gnu \
+    --bin aarnn_rust --features node_workload
+```
+
+Pass both executable paths to the serial worker rollout:
+
+```sh
 cd /home/pbisaacs/Developer/neuralmimicry/simulation_environment/ansible
-AARNN_NODE_BINARY=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target/release/aarnn_rust \
+AARNN_NODE_BINARY_X86_64=/path/to/x86_64-target/release/aarnn_rust \
+AARNN_NODE_BINARY_AARCH64=/path/to/aarch64-target/aarch64-unknown-linux-gnu/release/aarnn_rust \
   ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini playbooks/deploy_aarnn_sensory_workers.yml
 ```
 
-The worker playbook requires each listed native service to be active, stores a
-root-owned rollback copy, and waits for its gRPC port after each serial
-restart. The current inventory covers `qc02`–`qc04` and `sm00`–`sm01`, which
-participate in the five-network placement. It excludes offline `qc00` and
-`qc05`, and the separate Kubernetes `aarnn-engine` workload on `qc01`.
+The worker playbook checks that both local files match their declared
+architectures, selects the matching binary for each host, and requires each
+listed native service to be active before replacement. It stores a root-owned
+rollback copy and waits for the gRPC port after each serial restart. The
+current inventory covers `qc02`–`qc04` and `sm00`–`sm01`, which participate in
+the five-network placement. It excludes offline `qc00` and `qc05`, and the
+separate Kubernetes `aarnn-engine` workload on `qc01`.
 
 Then run the scoped API ingress rollout:
 

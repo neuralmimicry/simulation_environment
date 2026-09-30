@@ -5,56 +5,94 @@
   serial: 1
   gather_facts: true
   vars:
-    simulation_environment_aarnn_node_binary_source: "{{ lookup('env', 'AARNN_NODE_BINARY') | default('', true) }}"
+    simulation_environment_aarnn_node_binary_source_x86_64: "{{ lookup('env', 'AARNN_NODE_BINARY_X86_64') | default('', true) }}"
+    simulation_environment_aarnn_node_binary_source_aarch64: "{{ lookup('env', 'AARNN_NODE_BINARY_AARCH64') | default('', true) }}"
     simulation_environment_aarnn_node_binary_path: /usr/bin/aarnn_rust
     simulation_environment_aarnn_node_service: aarnn-node.service
     simulation_environment_aarnn_node_port: 50051
   pre_tasks:
-    - name: Require the release binary built from the pinned AARNN branch
+    - name: Require release binaries for both active worker architectures
       ansible.builtin.assert:
         that:
-          - simulation_environment_aarnn_node_binary_source | length > 0
+          - simulation_environment_aarnn_node_binary_source_x86_64 | length > 0
+          - simulation_environment_aarnn_node_binary_source_aarch64 | length > 0
         fail_msg: >-
-          Set AARNN_NODE_BINARY to the release aarnn_rust executable built from
-          codex/webots-api-ingress-20260929 before running this playbook.
+          Set AARNN_NODE_BINARY_X86_64 and AARNN_NODE_BINARY_AARCH64 to release
+          aarnn_rust executables built from codex/webots-api-ingress-20260929.
       run_once: true
 
-    - name: Inspect the local worker binary
+    - name: Inspect the local x86-64 worker binary
       ansible.builtin.stat:
-        path: "{{ simulation_environment_aarnn_node_binary_source }}"
+        path: "{{ simulation_environment_aarnn_node_binary_source_x86_64 }}"
       delegate_to: localhost
       become: false
       run_once: true
-      register: simulation_environment_aarnn_node_binary_stat
+      register: simulation_environment_aarnn_node_binary_stat_x86_64
 
-    - name: Require a regular local worker binary
+    - name: Inspect the local AArch64 worker binary
+      ansible.builtin.stat:
+        path: "{{ simulation_environment_aarnn_node_binary_source_aarch64 }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_stat_aarch64
+
+    - name: Require both local worker binaries to be regular files
       ansible.builtin.assert:
         that:
-          - simulation_environment_aarnn_node_binary_stat.stat.exists
-          - simulation_environment_aarnn_node_binary_stat.stat.isreg
-        fail_msg: "AARNN_NODE_BINARY must name an existing regular file."
+          - simulation_environment_aarnn_node_binary_stat_x86_64.stat.exists
+          - simulation_environment_aarnn_node_binary_stat_x86_64.stat.isreg
+          - simulation_environment_aarnn_node_binary_stat_aarch64.stat.exists
+          - simulation_environment_aarnn_node_binary_stat_aarch64.stat.isreg
+        fail_msg: "Both architecture-specific worker binary paths must exist as regular files."
       run_once: true
 
-    - name: Verify the release binary targets x86-64
+    - name: Verify the x86-64 release binary architecture
       ansible.builtin.command:
         argv:
           - file
           - --brief
-          - "{{ simulation_environment_aarnn_node_binary_source }}"
+          - "{{ simulation_environment_aarnn_node_binary_source_x86_64 }}"
       delegate_to: localhost
       become: false
       run_once: true
-      register: simulation_environment_aarnn_node_binary_type
+      register: simulation_environment_aarnn_node_binary_type_x86_64
       changed_when: false
 
-    - name: Require an x86-64 release binary
+    - name: Verify the AArch64 release binary architecture
+      ansible.builtin.command:
+        argv:
+          - file
+          - --brief
+          - "{{ simulation_environment_aarnn_node_binary_source_aarch64 }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_type_aarch64
+      changed_when: false
+
+    - name: Require both release binaries to match their declared architectures
       ansible.builtin.assert:
         that:
-          - "'x86-64' in simulation_environment_aarnn_node_binary_type.stdout"
+          - "'x86-64' in simulation_environment_aarnn_node_binary_type_x86_64.stdout"
+          - "'aarch64' in simulation_environment_aarnn_node_binary_type_aarch64.stdout"
         fail_msg: >-
-          The Webots sensory worker rollout targets x86-64 native workers; build
-          the binary on an x86-64 host before deploying it.
+          The Webots sensory workers require one x86-64 artifact for sm00/sm01
+          and one AArch64 artifact for qc02-qc04.
       run_once: true
+
+    - name: Require a supported native worker architecture
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture in ['x86_64', 'aarch64']
+        fail_msg: "No AARNN sensory worker binary is configured for this host architecture."
+
+    - name: Select the worker binary matching this host architecture
+      ansible.builtin.set_fact:
+        simulation_environment_aarnn_node_binary_source: >-
+          {{ simulation_environment_aarnn_node_binary_source_aarch64
+             if ansible_architecture == 'aarch64'
+             else simulation_environment_aarnn_node_binary_source_x86_64 }}
 
   tasks:
     - name: Require the native worker service to be active before replacement
