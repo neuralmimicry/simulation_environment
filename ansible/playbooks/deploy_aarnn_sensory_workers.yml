@@ -67,6 +67,38 @@
       changed_when: false
       failed_when: simulation_environment_aarnn_node_active.stdout != "active"
 
+    - name: Stage the candidate worker binary for a remote load check
+      ansible.builtin.copy:
+        src: "{{ simulation_environment_aarnn_node_binary_source }}"
+        dest: /tmp/aarnn_rust.webots-ingress
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Check that the candidate worker binary starts and exposes its CLI
+      ansible.builtin.command:
+        argv:
+          - /tmp/aarnn_rust.webots-ingress
+          - --help
+      register: simulation_environment_aarnn_node_help
+      changed_when: false
+
+    - name: Require node mode in the candidate worker binary
+      ansible.builtin.assert:
+        that:
+          - "'--node' in simulation_environment_aarnn_node_help.stdout"
+        fail_msg: "The candidate binary does not expose the native AARNN node mode."
+
+    - name: Require the candidate Prepare/Commit sensory RPC implementation
+      ansible.builtin.command:
+        argv:
+          - grep
+          - --binary-files=text
+          - --quiet
+          - prepare_sensory_input
+          - /tmp/aarnn_rust.webots-ingress
+      changed_when: false
+
     - name: Create a root-owned rollback directory
       ansible.builtin.file:
         path: /usr/local/lib/neuralmimicry/rollback
@@ -88,12 +120,18 @@
 
     - name: Install the Webots-capable worker binary
       ansible.builtin.copy:
-        src: "{{ simulation_environment_aarnn_node_binary_source }}"
+        src: /tmp/aarnn_rust.webots-ingress
         dest: "{{ simulation_environment_aarnn_node_binary_path }}"
+        remote_src: true
         owner: root
         group: root
         mode: "0755"
       notify: Restart the AARNN native worker
+
+    - name: Remove the staged worker binary
+      ansible.builtin.file:
+        path: /tmp/aarnn_rust.webots-ingress
+        state: absent
 
     - name: Apply the worker update before rolling to the next host
       ansible.builtin.meta: flush_handlers
