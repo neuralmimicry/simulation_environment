@@ -61,11 +61,15 @@ The bridge sends frames through `/api/aer/inject` and reads motor activity from
 select the current sensory bridge and preserve cluster fan-out. Activity reads
 also use API placement discovery instead of pinning a worker that may be a
 backup shard or become stale after a placement change. Busy activity reads
-are retryable and are not evidence that the network produced no output. Each
-controller process uses a distinct `session_id`; its sensory frame sequence
-and timestamp derive from the common Webots world clock, restored from the
-persisted ecology clock after a simulator restart. This is one wall-clock-paced
-world time domain shared by every robot and NPC, not a per-network counter.
+are retryable and are not evidence that the network produced no output. Once
+sensory admission succeeds, an unavailable activity projection does not cause
+that frame to be resubmitted or put the network into input backoff; the
+controller retains only its existing motor hold and checks activity on a later
+sample. Each controller process uses a distinct `session_id`; its sensory
+frame sequence and timestamp derive from the common Webots world clock,
+restored from the persisted ecology clock after a simulator restart. This is
+one wall-clock-paced world time domain shared by every robot and NPC, not a
+per-network counter.
 `--mode=realtime` targets wall-clock pacing, but CPU saturation can make the
 world lag; the supervisor logs the measured simulation-to-wall-clock rate with
 each state save. Sensor timestamps remain tied to the shared world state at the

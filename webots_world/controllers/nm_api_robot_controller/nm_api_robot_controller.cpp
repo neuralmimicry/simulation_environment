@@ -212,6 +212,8 @@ class InferenceWorker {
   bool stopping_ = false;
   std::vector<std::uint32_t> outputs_;
   bool outputs_pending_ = false;
+  std::chrono::steady_clock::time_point next_activity_warning_ =
+      std::chrono::steady_clock::time_point::min();
   std::thread thread_;
 
   bool reload_rotated_token() {
@@ -237,7 +239,8 @@ class InferenceWorker {
   }
 
   bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result,
-             double &request_ms, long &new_connections) {
+             bool &activity_available, double &request_ms,
+             long &new_connections) {
     // Leave the injection address unset so the orchestrator can choose the
     // current sensory bridge and preserve cluster fan-out. A configured worker
     // address may be a backup or become stale after a placement change.
@@ -259,6 +262,7 @@ class InferenceWorker {
     const std::string body = request.dump();
     request_ms = 0.0;
     new_connections = 0;
+    activity_available = false;
     auto account_request = [&](const HttpResult &http) {
       request_ms += http.total_time_seconds * 1000.0;
       new_connections += http.new_connections;
@@ -293,7 +297,7 @@ class InferenceWorker {
     if (!escaped_network) {
       std::cerr << "[nm_api_robot] cannot encode activity query robot=" << robot_name_
                 << " network=" << network_id_ << std::endl;
-      return false;
+      return true;
     }
     const std::string network_query = escaped_network;
     curl_free(escaped_network);
@@ -304,7 +308,7 @@ class InferenceWorker {
       if (!escaped_addr) {
         std::cerr << "[nm_api_robot] cannot encode activity address robot=" << robot_name_
                   << " network=" << network_id_ << std::endl;
-        return false;
+        return true;
       }
       activity_url += "&addr=";
       activity_url += escaped_addr;
@@ -321,8 +325,15 @@ class InferenceWorker {
       account_request(activity);
     }
     if (activity.code != CURLE_OK || activity.status < 200 || activity.status >= 300) {
-      log_http_failure("activity", activity);
-      return false;
+      // Sensory admission already succeeded. The AARNN activity endpoint is
+      // a best-effort projection and may return 503 while the network is
+      // traversing; do not treat that as a rejected frame or back off input.
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= next_activity_warning_) {
+        log_http_failure("activity projection", activity);
+        next_activity_warning_ = now + std::chrono::seconds(30);
+      }
+      return true;
     }
 
     try {
@@ -351,12 +362,15 @@ class InferenceWorker {
       }
       last_activity_step_ = sim_step;
       has_last_activity_step_ = true;
+      activity_available = true;
       return true;
     } catch (const std::exception &error) {
       std::cerr << "[nm_api_robot] invalid activity response robot=" << robot_name_
                 << " network=" << network_id_ << " step=" << frame.step
                 << " reason=" << error.what() << "\n";
-      return false;
+      // The sensory frame was admitted; a malformed optional projection must
+      // not cause the next controller pass to resubmit stale sensory data.
+      return true;
     }
   }
 
@@ -385,13 +399,15 @@ class InferenceWorker {
         has_pending_ = false;
       }
       std::vector<std::uint32_t> next_outputs;
+      bool activity_available = false;
       double request_ms = 0.0;
       long new_connections = 0;
-      if (infer(curl, frame, next_outputs, request_ms, new_connections)) {
+      if (infer(curl, frame, next_outputs, activity_available, request_ms,
+                new_connections)) {
         const auto mapped_outputs = static_cast<std::size_t>(std::count_if(
             next_outputs.begin(), next_outputs.end(),
             [this](std::uint32_t index) { return index < actuator_count_; }));
-        {
+        if (activity_available) {
           std::lock_guard<std::mutex> lock(mutex_);
           outputs_ = next_outputs;
           outputs_pending_ = true;
@@ -399,18 +415,21 @@ class InferenceWorker {
         ++successful_frames;
         const auto now = std::chrono::steady_clock::now();
         if (successful_frames == 1 || now >= next_status_log) {
-          std::cout << "[nm_api_robot] inference ok robot=" << robot_name_
-                    << " network=" << network_id_
-                    << " successful_frames=" << successful_frames
-                    << " step=" << frame.step
-                    << " input_spikes=" << std::count_if(
-                           frame.values.begin(), frame.values.end(),
-                           [this](float value) {
-                             return std::isfinite(value) && value >= input_spike_threshold_;
-                           })
-                    << " output_spikes=" << next_outputs.size()
-                    << " mapped_actuators=" << mapped_outputs
-                    << " request_ms=" << static_cast<long>(request_ms)
+          std::cout << "[nm_api_robot] sensory frame admitted robot="
+                    << robot_name_ << " network=" << network_id_
+                    << " admitted_frames=" << successful_frames
+                    << " step=" << frame.step << " input_spikes="
+                    << std::count_if(frame.values.begin(), frame.values.end(),
+                                     [this](float value) {
+                                       return std::isfinite(value) &&
+                                              value >= input_spike_threshold_;
+                                     })
+                    << " activity_snapshot="
+                    << (activity_available ? "available" : "pending");
+          if (activity_available)
+            std::cout << " output_spikes=" << next_outputs.size()
+                      << " mapped_actuators=" << mapped_outputs;
+          std::cout << " request_ms=" << static_cast<long>(request_ms)
                     << " new_connections=" << new_connections << std::endl;
           next_status_log = now + std::chrono::seconds(30);
         }
