@@ -302,6 +302,7 @@
     content: |
       NM_WEBOTS_SOURCE_WORLD_FILE={{ simulation_environment_webots_repo_path }}/webots_world/worlds/shared_fleet_neuroworld.wbt
       NM_WEBOTS_STREAM_PORT={{ simulation_environment_webots_port }}
+      NM_WEBOTS_BINDINGS_REVISION={{ simulation_environment_webots_network_bindings | dictsort | to_json | hash('sha256') }}
   notify: Reload systemd and restart the shared Webots world
 
 - name: Create the nftables include directory

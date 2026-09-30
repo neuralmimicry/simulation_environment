@@ -6,7 +6,7 @@ runtime_world="${NM_WEBOTS_RUNTIME_WORLD_FILE:?NM_WEBOTS_RUNTIME_WORLD_FILE is r
 source_world="${NM_WEBOTS_SOURCE_WORLD_FILE:?NM_WEBOTS_SOURCE_WORLD_FILE is required}"
 
 source_dir="$(cd "$(dirname "$source_world")/.." && pwd)"
-source_revision="$(
+legacy_source_revision="$(
   {
     sha256sum "$source_world"
     find "$source_dir/protos" -maxdepth 1 -type f -name '*.proto' -print0 \
@@ -14,12 +14,18 @@ source_revision="$(
       | xargs -0 -r sha256sum
   } | sha256sum | cut -d' ' -f1
 )"
+binding_revision="${NM_WEBOTS_BINDINGS_REVISION:-unconfigured}"
+source_revision="$(printf '%s\n%s\n' "$legacy_source_revision" "$binding_revision" | sha256sum | cut -d' ' -f1)"
 
 if [[ -s "$runtime_world" ]]; then
   revision_file="${runtime_world}.source-revision"
   saved_revision=""
   [[ -r "$revision_file" ]] && saved_revision="$(<"$revision_file")"
   if [[ "$saved_revision" == "$source_revision" ]]; then
+    world="$runtime_world"
+  elif [[ "$saved_revision" == "$legacy_source_revision" ]]; then
+    # Keep the saved ecology and robot poses during the first deployment of
+    # binding-aware robot selection; the supervisor will prune only unbound slots.
     world="$runtime_world"
   else
     # A changed source world or PROTO graph needs a fresh Webots scene. Keep

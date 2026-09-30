@@ -12,9 +12,11 @@ Bindings follow network IDs rather than compute-host names, because each
 network may be distributed across several `qc` and `sm` nodes.
 The world reuses the AARNN `DeviceMapper` and habitat assets in
 `webots_world/protos/`. A supervisor animates wildlife, changes the light cycle,
-and writes a recoverable world snapshot every 30 seconds. The systemd service
-runs independently of browser sessions and reloads the source world when its
-world or PROTO revision changes while preserving the ecological clock.
+removes unbound robot slots from the physics scene, and writes a recoverable
+world snapshot every 30 seconds. Changing the configured fleet population
+reloads the source scene while preserving the ecological clock; robot poses
+return to their authored starting positions. The systemd service runs
+independently of browser sessions.
 
 Install Webots and run the shared world on `sm00` and `sm01` with Ansible:
 
@@ -59,15 +61,15 @@ backup shard or become stale after a placement change. Busy activity reads
 are retryable and are not evidence that the network produced no output. Each
 controller process uses a distinct `session_id`; its sensory frame sequence
 and timestamp derive from the common Webots world clock, restored from the
-persisted ecology clock after a simulator restart. This is one shared world
-time domain, not a per-network counter. `--mode=realtime` targets wall-clock
-pacing, but CPU saturation can make the world lag wall time. Sensor timestamps
-remain tied to simulated state; do not retimestamp them to host wall time.
-AARNN inference runs asynchronously per network, so different calculation
-latencies change when each action arrives without changing the shared Webots
-world clock. Every robot and the ecology continue
-advancing together while inference runs; each action takes effect when its
-network result is ready.
+persisted ecology clock after a simulator restart. This is one wall-clock-paced
+world time domain shared by every robot and NPC, not a per-network counter.
+`--mode=realtime` targets wall-clock pacing, but CPU saturation can make the
+world lag; the supervisor logs the measured simulation-to-wall-clock rate with
+each state save. Sensor timestamps remain tied to the shared world state at the
+time of sampling. AARNN inference runs asynchronously per network, so different
+calculation and communication latencies change when each action arrives
+without changing or pausing the shared world clock. Do not retimestamp an older
+sensor sample to its later host arrival time.
 Treat sensory admission as separate from motor activity: verify a successful
 controller report with non-zero `output_spikes` and `mapped_actuators` before
 claiming a robot has acted.

@@ -1,6 +1,7 @@
 #include <webots/Field.hpp>
 #include <webots/Node.hpp>
 #include <webots/Supervisor.hpp>
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <chrono>
@@ -15,6 +16,7 @@
 using webots::Field;
 using webots::Node;
 using webots::Supervisor;
+using nlohmann::json;
 
 namespace {
 constexpr double kTau = 6.28318530717958647692;
@@ -43,6 +45,61 @@ constexpr std::array<Npc, 6> kNpcs{{
 std::string env_or(const char *key, const char *fallback) {
   const char *value = std::getenv(key);
   return value && *value ? value : fallback;
+}
+
+void remove_unbound_robots(Supervisor &supervisor, const std::string &fleet_path) {
+  json robots = json::object();
+  std::ifstream input(fleet_path);
+  if (input) {
+    try {
+      const auto config = json::parse(input);
+      if (config.is_object()) {
+        const auto configured_robots = config.value("robots", json::object());
+        if (configured_robots.is_object())
+          robots = configured_robots;
+      }
+    } catch (const json::exception &error) {
+      std::cerr << "[nm_ecology] cannot parse fleet config at " << fleet_path
+                << ": " << error.what() << "; unbound slots will be removed\n";
+    }
+  } else {
+    std::cerr << "[nm_ecology] fleet config is unavailable at " << fleet_path
+              << "; unbound slots will be removed\n";
+  }
+
+  Node *root = supervisor.getRoot();
+  Field *children = root ? root->getField("children") : nullptr;
+  if (!children) {
+    std::cerr << "[nm_ecology] cannot inspect world children for fleet pruning\n";
+    return;
+  }
+
+  std::size_t retained = 0;
+  std::size_t removed = 0;
+  for (int index = children->getCount() - 1; index >= 0; --index) {
+    Node *node = children->getMFNode(index);
+    Field *name_field = node ? node->getField("name") : nullptr;
+    if (!name_field)
+      continue;
+    const std::string robot_name = name_field->getSFString();
+    if (robot_name.rfind("AARNN_", 0) != 0)
+      continue;
+
+    const auto binding = robots.find(robot_name);
+    const std::string network_id =
+        binding != robots.end() && binding->is_object()
+            ? binding->value("network_id", std::string{})
+            : std::string{};
+    if (network_id.find_first_not_of(" \t\r\n") == std::string::npos) {
+      std::cout << "[nm_ecology] removing unbound robot slot=" << robot_name << std::endl;
+      node->remove();
+      ++removed;
+    } else {
+      ++retained;
+    }
+  }
+  std::cout << "[nm_ecology] fleet physics robots retained=" << retained
+            << " removed_unbound=" << removed << std::endl;
 }
 
 void set_vec3(Field *field, double x, double y, double z) {
@@ -145,6 +202,8 @@ bool save_world_clock(const std::filesystem::path &path, double elapsed) {
 int main() {
   Supervisor supervisor;
   const int step_ms = static_cast<int>(supervisor.getBasicTimeStep());
+  remove_unbound_robots(
+      supervisor, env_or("NM_WEBOTS_FLEET_CONFIG", "/etc/neuralmimicry/webots/fleet.json"));
   Node *daylight = supervisor.getFromDef("NM_DAYLIGHT");
   Field *light_intensity = daylight ? daylight->getField("intensity") : nullptr;
   Field *light_color = daylight ? daylight->getField("color") : nullptr;
@@ -168,16 +227,19 @@ int main() {
   const auto state_file = state_path.empty() ? std::filesystem::path{} : std::filesystem::path(state_path);
   const auto clock_file = state_path.empty() ? std::filesystem::path{} : std::filesystem::path(state_path + ".clock");
   const double elapsed_before_start = load_world_clock(clock_file);
-  auto next_save = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  auto last_save_wall = std::chrono::steady_clock::now();
+  double last_save_world = elapsed_before_start;
+  auto next_save = last_save_wall + std::chrono::seconds(30);
   std::cout << "[nm_ecology] shared ecology supervisor ready; timestep=" << step_ms
             << "ms; state=" << (state_path.empty() ? "disabled" : state_path)
             << "; prior_elapsed=" << elapsed_before_start << "s\n";
 
   while (supervisor.step(step_ms) != -1) {
     const double t = elapsed_before_start + supervisor.getTime();
-    // A complete day-night cycle takes twelve real-time minutes; seasonal light
-    // and flora cycles take four hours. This keeps ecology changes visible while
-    // leaving the shared simulator running at real-time pace.
+    // All robots and ecology use this one world clock. Real-time mode targets
+    // wall-clock pacing; network inference never owns or advances a private clock.
+    // A complete day-night cycle takes twelve world-clock minutes and a seasonal
+    // cycle takes four hours.
     const double day = kTau * t / 720.0;
     const double season = kTau * t / 14400.0;
     if (light_intensity)
@@ -203,9 +265,19 @@ int main() {
       }
     }
 
-    if (!state_file.empty() && std::chrono::steady_clock::now() >= next_save) {
+    const auto save_wall = std::chrono::steady_clock::now();
+    if (!state_file.empty() && save_wall >= next_save) {
       save_snapshot(supervisor, state_file);
       save_world_clock(clock_file, t);
+      const double wall_seconds =
+          std::chrono::duration<double>(save_wall - last_save_wall).count();
+      const double world_seconds = t - last_save_world;
+      const double pace = wall_seconds > 0.0 ? world_seconds / wall_seconds : 0.0;
+      std::cout << "[nm_ecology] world clock pace sim_seconds=" << world_seconds
+                << " wall_seconds=" << wall_seconds << " ratio=" << pace << "x"
+                << std::endl;
+      last_save_wall = save_wall;
+      last_save_world = t;
       next_save = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     }
   }
