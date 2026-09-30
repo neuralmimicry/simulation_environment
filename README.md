@@ -80,6 +80,7 @@ Build the AArch64 artifact natively on an AArch64 host (the active `qc02`–
 `qc04` workers use this architecture):
 
 ```sh
+AARNN_RUST_SRC=/path/to/aarnn_rust-webots-api-ingress-worktree
 cd "$AARNN_RUST_SRC"
 CARGO_TARGET_DIR=/path/to/aarch64-target \
   cargo build --locked --release --target aarch64-unknown-linux-gnu \
