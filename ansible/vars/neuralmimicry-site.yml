@@ -73,8 +73,8 @@ simulation_environment_webots_simulation_ingress_principals:
 simulation_environment_webots_aarnn_namespace: aarnn
 simulation_environment_webots_aarnn_bearer_secret: nm-webots-sensory-ingress
 simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn_orchestrator_bearer
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:webots-20260930-snapshot-metadata-orchestrator-arm64-64k-hwe"
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:1c2bb885962284f8ecf873b85cb6c35703b585e5-orchestrator-arm64-64k-hwe"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.
-simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:webots-20260930-snapshot-metadata-node-arm64-64k-hwe"
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:1c2bb885962284f8ecf873b85cb6c35703b585e5-node-arm64-64k-hwe"
 simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:1c2bb885962284f8ecf873b85cb6c35703b585e5-web-ui-arm64-64k-hwe"
