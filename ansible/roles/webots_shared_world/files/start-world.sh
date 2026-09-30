@@ -45,4 +45,4 @@ fi
 
 export NM_WEBOTS_SOURCE_REVISION="$source_revision"
 exec /usr/bin/xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX +render -noreset' \
-  "$webots_home/webots" --batch --stdout --stderr --mode=realtime --stream=w3d --port="${NM_WEBOTS_STREAM_PORT:-1234}" "$world"
+  "$webots_home/webots" --batch --stdout --stderr --mode=realtime --no-rendering --stream=w3d --port="${NM_WEBOTS_STREAM_PORT:-1234}" "$world"

@@ -28,7 +28,10 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini playbooks/s
 The playbook installs Webots from Cyberbotics' signed APT repository, builds
 the C++ robot and ecology controllers, enables the persistent world on `sm00`,
 and keeps `sm01` prepared as the second stream host. The W3D socket is limited
-to the cluster ingress networks. Sign in at
+to the cluster ingress networks. The server runs Webots with `--no-rendering`
+while keeping its W3D stream enabled; local profiling confirmed the stream
+continues sending world updates, without rendering a duplicate 3D view on the
+compute host. Sign in at
 `https://neuralmimicry.ai/webots`; the page connects to the authenticated
 `wss://webots.neuralmimicry.ai/stream` viewer stream.
 
