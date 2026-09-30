@@ -35,10 +35,13 @@ logical networks (`celegans_01`, `celegans_02`, `hexapod_01`,
 `neuralmimicry-shared-snn`, and `tenant-aarnn`) with their verified I/O
 dimensions. To change them, set
 `AARNN_WEBOTS_ACCESS_TOKEN` or point `AARNN_WEBOTS_ACCESS_TOKEN_FILE` at a
-control-node secret file containing a Webots service token with `aarnn:use`
-permission, then override `simulation_environment_webots_network_bindings` with the logical
-network ID, compatible device regexes, and exact input/output counts for each
-robot key. The Hexapod camera is sampled at 1x1 resolution to keep its two
+control-node secret file containing the Webots service token. It needs general
+`aarnn:use` access and an active network-scoped peripheral-input grant in
+`simulation_environment_webots_peripheral_input_grants`; the site profile
+grants the `webots` service principal only the five network IDs listed above.
+To change the fleet, override `simulation_environment_webots_network_bindings`
+with the logical network ID, compatible device regexes, and exact input/output
+counts for each robot key, then keep its AARNN grant mapping in sync. The Hexapod camera is sampled at 1x1 resolution to keep its two
 event channels aligned with the existing 34-channel AARNN profile. The C++
 bridge converts normalized sensor readings to raw AER spike indices locally,
 using the configurable `simulation_environment_webots_input_spike_threshold`
@@ -57,6 +60,23 @@ frame identity.
 The role checks that bound deployments have a token and installs it with
 owner-only permissions on both fleet hosts. Keep token values out of version
 control.
+
+Before enabling those robot bindings, build and import the AARNN branch images
+specified in `ansible/vars/neuralmimicry-site.yml` on the QC workers, then run
+the scoped ingress rollout:
+
+```sh
+cd ansible
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini playbooks/deploy_aarnn_webots_ingress.yml
+```
+
+That playbook provisions a separate root-only orchestrator bearer on Spirit,
+stores it as a Kubernetes Secret, and patches only `aarnn-orchestrator` and
+`aarnn-web-ui` with the source-built images and network-scoped grants. It
+leaves the control API, engine, and FPV workers unchanged. The Web UI reports
+the authenticated caller's scopes at `/api/peripheral/input-grants`; revoke a
+scope by removing its principal/network pair and rerunning the playbook.
+Apply `playbooks/shared_world.yml` after the AARNN ingress rollout succeeds.
 
 The authenticated browser broker, world catalogue, robot bindings, controllers,
 and Ansible runtime installation all live in this repository. The website's
