@@ -44,6 +44,9 @@ control-node secret file containing the Webots service token. It needs general
 `aarnn:use` access and an active network-scoped peripheral-input grant in
 `simulation_environment_webots_peripheral_input_grants`; the site profile
 grants the `webots` service principal only the two network IDs listed above.
+Keep the credential independent of a browser login. When its protected file is
+rotated, each robot controller reloads it after an HTTP 401 and retries the
+current request without restarting the shared world.
 To change the fleet, override `simulation_environment_webots_network_bindings`
 with the logical network ID, compatible device regexes, and exact input/output
 counts for each robot key, then keep its AARNN grant mapping in sync. The

@@ -60,6 +60,15 @@ std::string read_file(const std::string &path) {
   return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
+std::string read_token(const std::string &path) {
+  std::string token = read_file(path);
+  token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char ch) {
+                return std::isspace(ch);
+              }),
+              token.end());
+  return token;
+}
+
 double load_world_elapsed_seconds(const std::string &world_path) {
   if (world_path.empty())
     return 0.0;
@@ -138,10 +147,12 @@ HttpResult perform_http(CURL *curl, const std::string &url,
 class InferenceWorker {
  public:
   InferenceWorker(std::string api_base, std::string activity_addr,
-                  std::string token, std::string network_id, std::string robot_name,
+                  std::string token_file, std::string token,
+                  std::string network_id, std::string robot_name,
                   std::size_t actuator_count, float input_spike_threshold)
       : api_base_(std::move(api_base)),
         activity_addr_(std::move(activity_addr)),
+        token_file_(std::move(token_file)),
         token_(std::move(token)),
         network_id_(std::move(network_id)),
         robot_name_(std::move(robot_name)),
@@ -185,6 +196,7 @@ class InferenceWorker {
  private:
   std::string api_base_;
   std::string activity_addr_;
+  std::string token_file_;
   std::string token_;
   std::string network_id_;
   std::string robot_name_;
@@ -201,6 +213,28 @@ class InferenceWorker {
   std::vector<std::uint32_t> outputs_;
   bool outputs_pending_ = false;
   std::thread thread_;
+
+  bool reload_rotated_token() {
+    const std::string current = read_token(token_file_);
+    if (current.empty() || current == token_)
+      return false;
+    token_ = current;
+    std::cout << "[nm_api_robot] reloaded rotated service credential robot="
+              << robot_name_ << " network=" << network_id_ << std::endl;
+    return true;
+  }
+
+  HttpResult perform_authenticated_http(CURL *curl, const std::string &url,
+                                        const std::string *post_body = nullptr) {
+    HttpResult response = perform_http(curl, url, token_, post_body);
+    if (response.code != CURLE_OK || response.status != 401 || !reload_rotated_token())
+      return response;
+
+    HttpResult retry = perform_http(curl, url, token_, post_body);
+    retry.total_time_seconds += response.total_time_seconds;
+    retry.new_connections += response.new_connections;
+    return retry;
+  }
 
   bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result,
              double &request_ms, long &new_connections) {
@@ -246,7 +280,8 @@ class InferenceWorker {
       std::cerr << std::endl;
     };
 
-    const HttpResult injection = perform_http(curl, api_base_ + "/aer/inject", token_, &body);
+    const HttpResult injection =
+        perform_authenticated_http(curl, api_base_ + "/aer/inject", &body);
     account_request(injection);
     if (injection.code != CURLE_OK || injection.status < 200 || injection.status >= 300) {
       log_http_failure("inject", injection);
@@ -276,13 +311,13 @@ class InferenceWorker {
       curl_free(escaped_addr);
     }
 
-    HttpResult activity = perform_http(curl, activity_url, token_);
+    HttpResult activity = perform_authenticated_http(curl, activity_url);
     account_request(activity);
     if ((activity.code != CURLE_OK || activity.status >= 500) && !activity_addr_.empty()) {
       // The cached direct node may be offline. Let the API's normal cluster
       // discovery select a replacement, then follow its returned source.
       const std::string fallback_url = api_base_ + "/activity?network_id=" + network_query;
-      activity = perform_http(curl, fallback_url, token_);
+      activity = perform_authenticated_http(curl, fallback_url);
       account_request(activity);
     }
     if (activity.code != CURLE_OK || activity.status < 200 || activity.status >= 300) {
@@ -456,15 +491,15 @@ int main() {
     const std::string api_base = config.value("api_base", "https://aarnn.neuralmimicry.ai/api");
     const std::string activity_addr = config.value("activity_addr", "");
     const std::string token_file = config.value("access_token_file", "");
-    std::string token = read_file(token_file);
-    token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char c) { return std::isspace(c); }), token.end());
+    std::string token = read_token(token_file);
     if (!binding.network_id.empty() && !token.empty()) {
       if ((binding.expected_sensory && sensor_indices.size() != binding.expected_sensory) ||
           (binding.expected_outputs && actuator_indices.size() != binding.expected_outputs)) {
         throw std::runtime_error("Webots device alignment differs from the configured AARNN profile");
       }
       curl_global_init(CURL_GLOBAL_DEFAULT);
-      worker = std::make_unique<InferenceWorker>(api_base, activity_addr, token,
+      worker = std::make_unique<InferenceWorker>(api_base, activity_addr,
+                                                 token_file, token,
                                                  binding.network_id, robot_name,
                                                  actuator_indices.size(),
                                                  config.value("input_spike_threshold", 0.5f));

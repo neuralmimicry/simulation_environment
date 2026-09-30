@@ -281,7 +281,8 @@
     owner: "{{ simulation_environment_webots_service_user }}"
     group: "{{ simulation_environment_webots_service_user }}"
     mode: "0600"
-  notify: Reload systemd and restart the shared Webots world
+  # The robot controller reloads a rotated token on the next HTTP 401. Avoid
+  # restarting the live world solely because a service credential changed.
   when: simulation_environment_webots_access_token | trim | length > 0
 
 - name: Install the persistent Webots world start script
