@@ -1,0 +1,121 @@
+---
+- name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
+  hosts: aarnn_sensory_workers
+  become: true
+  serial: 1
+  gather_facts: true
+  vars:
+    simulation_environment_aarnn_node_binary_source: "{{ lookup('env', 'AARNN_NODE_BINARY') | default('', true) }}"
+    simulation_environment_aarnn_node_binary_path: /usr/bin/aarnn_rust
+    simulation_environment_aarnn_node_service: aarnn-node.service
+    simulation_environment_aarnn_node_port: 50051
+  pre_tasks:
+    - name: Require the release binary built from the pinned AARNN branch
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_node_binary_source | length > 0
+        fail_msg: >-
+          Set AARNN_NODE_BINARY to the release aarnn_rust executable built from
+          codex/webots-api-ingress-20260929 before running this playbook.
+      run_once: true
+
+    - name: Inspect the local worker binary
+      ansible.builtin.stat:
+        path: "{{ simulation_environment_aarnn_node_binary_source }}"
+      delegate_to: localhost
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_stat
+
+    - name: Require a regular local worker binary
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_node_binary_stat.stat.exists
+          - simulation_environment_aarnn_node_binary_stat.stat.isreg
+        fail_msg: "AARNN_NODE_BINARY must name an existing regular file."
+      run_once: true
+
+    - name: Verify the release binary targets x86-64
+      ansible.builtin.command:
+        argv:
+          - file
+          - --brief
+          - "{{ simulation_environment_aarnn_node_binary_source }}"
+      delegate_to: localhost
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_type
+      changed_when: false
+
+    - name: Require an x86-64 release binary
+      ansible.builtin.assert:
+        that:
+          - "'x86-64' in simulation_environment_aarnn_node_binary_type.stdout"
+        fail_msg: >-
+          The Webots sensory worker rollout targets x86-64 native workers; build
+          the binary on an x86-64 host before deploying it.
+      run_once: true
+
+  tasks:
+    - name: Require the native worker service to be active before replacement
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ simulation_environment_aarnn_node_service }}"
+      register: simulation_environment_aarnn_node_active
+      changed_when: false
+      failed_when: simulation_environment_aarnn_node_active.stdout != "active"
+
+    - name: Create a root-owned rollback directory
+      ansible.builtin.file:
+        path: /usr/local/lib/neuralmimicry/rollback
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Preserve the currently installed worker binary
+      ansible.builtin.copy:
+        src: "{{ simulation_environment_aarnn_node_binary_path }}"
+        dest: >-
+          /usr/local/lib/neuralmimicry/rollback/aarnn_rust.{{ ansible_date_time.iso8601_basic_short }}
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+        force: false
+
+    - name: Install the Webots-capable worker binary
+      ansible.builtin.copy:
+        src: "{{ simulation_environment_aarnn_node_binary_source }}"
+        dest: "{{ simulation_environment_aarnn_node_binary_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart the AARNN native worker
+
+    - name: Apply the worker update before rolling to the next host
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for the native worker gRPC port to return
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ simulation_environment_aarnn_node_port }}"
+        state: started
+        delay: 2
+        timeout: 90
+
+    - name: Confirm the native worker service remains active
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ simulation_environment_aarnn_node_service }}"
+      changed_when: false
+      register: simulation_environment_aarnn_node_after
+      failed_when: simulation_environment_aarnn_node_after.stdout != "active"
+
+  handlers:
+    - name: Restart the AARNN native worker
+      ansible.builtin.systemd:
+        name: "{{ simulation_environment_aarnn_node_service }}"
+        state: restarted

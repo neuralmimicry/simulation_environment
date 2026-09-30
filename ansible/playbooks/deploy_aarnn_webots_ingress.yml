@@ -35,6 +35,14 @@
                         key: NM_ORCHESTRATOR_BEARER_TOKEN
                   - name: NM_PERIPHERAL_INPUT_GRANTS_JSON
                     value: "{{ simulation_environment_webots_peripheral_input_grants | to_json }}"
+    simulation_environment_webots_aarnn_engine_patch:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: engine
+                image: "{{ simulation_environment_webots_aarnn_engine_image }}"
+                imagePullPolicy: Always
   tasks:
     - name: Check the AARNN grant scopes match configured Webots networks
       ansible.builtin.assert:
@@ -156,6 +164,21 @@
       register: simulation_environment_webots_aarnn_web_ui_patch_result
       changed_when: "not simulation_environment_webots_aarnn_web_ui_patch_result.stdout.endswith('not patched')"
 
+    - name: Upgrade AARNN engine workers to the Webots Prepare/Commit RPC server
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - daemonset/aarnn-engine
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --type=strategic
+          - --patch
+          - "{{ simulation_environment_webots_aarnn_engine_patch | to_json }}"
+      register: simulation_environment_webots_aarnn_engine_patch_result
+      changed_when: "not simulation_environment_webots_aarnn_engine_patch_result.stdout.endswith('not patched')"
+
     - name: Wait for the AARNN orchestrator rollout
       ansible.builtin.command:
         argv:
@@ -177,6 +200,19 @@
           - rollout
           - status
           - deployment/aarnn-web-ui
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --timeout=10m
+      changed_when: false
+
+    - name: Wait for the AARNN engine DaemonSet rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - daemonset/aarnn-engine
           - --namespace
           - "{{ simulation_environment_webots_aarnn_namespace }}"
           - --timeout=10m

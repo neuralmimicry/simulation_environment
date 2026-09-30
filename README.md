@@ -62,8 +62,27 @@ owner-only permissions on both fleet hosts. Keep token values out of version
 control.
 
 Before enabling those robot bindings, build and import the AARNN branch images
-specified in `ansible/vars/neuralmimicry-site.yml` on the QC workers, then run
-the scoped ingress rollout:
+specified in `ansible/vars/neuralmimicry-site.yml` on the QC workers. The
+bounded sensory Prepare/Commit RPCs also need to be installed on the native
+workers that may own a network's sensory layer. Build the x86-64 binary from
+the pinned AARNN branch and roll active bridge workers serially:
+
+```sh
+cd /home/pbisaacs/Developer/neuralmimicry/aarnn_rust
+CARGO_TARGET_DIR=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target \
+  cargo build --locked --release --bin aarnn_rust --features node_workload
+cd /home/pbisaacs/Developer/neuralmimicry/simulation_environment/ansible
+AARNN_NODE_BINARY=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/target/release/aarnn_rust \
+  ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini playbooks/deploy_aarnn_sensory_workers.yml
+```
+
+The worker playbook requires each listed native service to be active, stores a
+root-owned rollback copy, and waits for its gRPC port after each serial
+restart. The current inventory covers `qc02`–`qc04` and `sm00`–`sm01`, which
+participate in the five-network placement. It excludes offline `qc00` and
+`qc05`, and the separate Kubernetes `aarnn-engine` workload on `qc01`.
+
+Then run the scoped API ingress rollout:
 
 ```sh
 cd ansible
@@ -71,11 +90,13 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini playbooks/d
 ```
 
 That playbook provisions a separate root-only orchestrator bearer on Spirit,
-stores it as a Kubernetes Secret, and patches only `aarnn-orchestrator` and
-`aarnn-web-ui` with the source-built images and network-scoped grants. It
-leaves the control API, engine, and FPV workers unchanged. The Web UI reports
-the authenticated caller's scopes at `/api/peripheral/input-grants`; revoke a
-scope by removing its principal/network pair and rerunning the playbook.
+stores it as a Kubernetes Secret, patches `aarnn-orchestrator` and
+`aarnn-web-ui` with the source-built images and network-scoped grants, and
+updates the `aarnn-engine` DaemonSet so Kubernetes-hosted bridges implement the
+same Prepare/Commit RPCs. The control API and FPV workloads remain unchanged.
+The Web UI reports the authenticated caller's scopes at
+`/api/peripheral/input-grants`; revoke a scope by removing its principal/network
+pair and rerunning the playbook.
 Apply `playbooks/shared_world.yml` after the AARNN ingress rollout succeeds.
 
 The authenticated browser broker, world catalogue, robot bindings, controllers,
