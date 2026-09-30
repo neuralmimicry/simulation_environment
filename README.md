@@ -45,8 +45,9 @@ can be supplied via `AARNN_WEBOTS_ACCESS_TOKEN` or
 `AARNN_WEBOTS_ACCESS_TOKEN_FILE`, which points at a
 control-node secret file containing the Webots service token. It needs general
 `aarnn:use` access and an active network-scoped peripheral-input grant in
-`simulation_environment_webots_peripheral_input_grants`; the site profile
-grants the `webots` service principal only the two network IDs listed above.
+`simulation_environment_webots_peripheral_input_grants`, as a list of
+`{principal, brain_id}` objects; the site profile grants the `webots` service
+principal only the two network IDs listed above.
 Keep the credential independent of a browser login. When its protected file is
 rotated, each robot controller reloads it after an HTTP 401 and retries the
 current request without restarting the shared world.

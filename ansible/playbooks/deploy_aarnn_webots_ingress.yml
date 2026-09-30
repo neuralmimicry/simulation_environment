@@ -49,11 +49,15 @@
     - name: Check the AARNN grant scopes match configured Webots networks
       ansible.builtin.assert:
         that:
-          - simulation_environment_webots_peripheral_input_grants is mapping
+          - simulation_environment_webots_peripheral_input_grants is sequence
+          - simulation_environment_webots_peripheral_input_grants is not string
           - simulation_environment_webots_peripheral_input_grants | length > 0
           - >-
             (
-              simulation_environment_webots_peripheral_input_grants.keys()
+              simulation_environment_webots_peripheral_input_grants
+              | map(attribute='brain_id')
+              | map('string')
+              | map('trim')
               | list
               | difference(
                   simulation_environment_webots_network_bindings
@@ -80,8 +84,8 @@
             (
               simulation_environment_webots_simulation_ingress_principals
               | difference(
-                  simulation_environment_webots_peripheral_input_grants.values()
-                  | flatten
+                  simulation_environment_webots_peripheral_input_grants
+                  | map(attribute='principal')
                   | unique
                   | list
                 )
@@ -90,10 +94,29 @@
         fail_msg: "Managed simulation principals must have an exact configured PeripheralInput grant."
       tags: [webots_ingress_config]
 
+    - name: Check no PeripheralInput grant exceeds the simulation ingress allow-list
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              simulation_environment_webots_peripheral_input_grants
+              | map(attribute='principal')
+              | map('string')
+              | difference(simulation_environment_webots_simulation_ingress_principals)
+              | length
+            ) == 0
+        fail_msg: "PeripheralInput grants must be limited to simulation ingress principals."
+      tags: [webots_ingress_config]
+
     - name: Check every managed simulation identity is granted each embodied network
       ansible.builtin.assert:
         that:
-          - item.0 in simulation_environment_webots_peripheral_input_grants[item.1]
+          - >-
+            simulation_environment_webots_peripheral_input_grants
+            | selectattr('principal', 'equalto', item.0)
+            | selectattr('brain_id', 'equalto', item.1)
+            | list
+            | length > 0
         fail_msg: "Simulation identity {{ item.0 }} lacks a brain-scoped PeripheralInput grant for {{ item.1 }}."
       loop: >-
         {{

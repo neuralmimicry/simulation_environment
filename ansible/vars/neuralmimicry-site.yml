@@ -63,10 +63,10 @@ simulation_environment_webots_activity_addr: ""
 # networks embodied in this shared scene. Removing a principal/network pair
 # and rolling aarnn-web-ui revokes that peripheral grant.
 simulation_environment_webots_peripheral_input_grants:
-  neuralmimicry-shared-snn:
-    - webots
-  tenant-aarnn:
-    - webots
+  - principal: webots
+    brain_id: neuralmimicry-shared-snn
+  - principal: webots
+    brain_id: tenant-aarnn
 simulation_environment_webots_simulation_ingress_principals:
   - webots
 
