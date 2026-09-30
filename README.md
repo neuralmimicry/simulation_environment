@@ -169,3 +169,10 @@ The authenticated browser broker, world catalogue, robot bindings, controllers,
 and Ansible runtime installation all live in this repository. The website's
 `/webots` route and the Continuum Ansible playbook provide the sign-in and
 deployment integration.
+
+Browser launch sends the cached central bearer token when it is still present.
+If it has expired or was cleared while the user remains signed in, the broker
+also accepts the shared Customers session cookie for the handoff. Cookie-based
+exchange is restricted to HTTPS requests originating from the commercial site
+or the Webots host and is validated by the internal Customers `/api/session`
+endpoint before the broker creates its own Webots session.

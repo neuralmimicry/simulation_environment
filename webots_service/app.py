@@ -642,6 +642,31 @@ def _identity_can_use_webots(identity: Dict[str, Any]) -> bool:
     return bool(entry.get("can_use") or entry.get("can_control")) or level in {"use", "control"}
 
 
+def _trusted_exchange_origin(
+    origin: str,
+    site_base_url: str,
+    request_host: str,
+    require_https: bool = True,
+) -> bool:
+    parsed = urlparse((origin or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    if require_https and parsed.scheme != "https":
+        return False
+    expected_port = 443 if parsed.scheme == "https" else 80
+    if parsed.port is not None and parsed.port != expected_port:
+        return False
+    trusted_hosts = {
+        value
+        for value in (
+            urlparse(site_base_url).hostname,
+            (request_host or "").split(":", 1)[0],
+        )
+        if value
+    }
+    return parsed.hostname.lower() in {value.lower() for value in trusted_hosts}
+
+
 def _catalog() -> Dict[str, Dict[str, Any]]:
     return current_app.extensions["webots_catalog"]
 
@@ -736,13 +761,22 @@ def _load_catalog(settings: Settings) -> Dict[str, Dict[str, Any]]:
     return catalog
 
 
-def _verify_access_token(access_token: str) -> Dict[str, Any]:
+def _verify_access_token(access_token: str, cookie_header: str = "") -> Dict[str, Any]:
     base = _settings().central_auth_api_base
     if not base:
         return {"authenticated": False}
+    headers = {"Accept": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    if cookie_header:
+        # Customers shares its browser-session cookie across neuralmimicry.ai
+        # subdomains. Forward it only to the configured internal auth API so a
+        # valid site session can complete the handoff after a cached bearer
+        # token has expired or been cleared.
+        headers["Cookie"] = cookie_header
     response = requests.get(
         f"{base}/api/session",
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers=headers,
         timeout=_settings().central_auth_timeout_secs,
     )
     if response.status_code >= 400:
@@ -862,11 +896,19 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             access_token = str(request.form.get("access_token") or request.values.get("access_token") or "").strip()
             next_path = _safe_next_path(request.form.get("next") or request.values.get("next"))
 
-        if not access_token:
-            return jsonify({"error": "access_token_required"}), 400
+        cookie_header = request.headers.get("Cookie", "").strip()
+        if not access_token and not cookie_header:
+            return jsonify({"error": "access_token_or_session_required"}), 401
+        if cookie_header and not _trusted_exchange_origin(
+            request.headers.get("Origin", ""),
+            settings.site_base_url,
+            request.host,
+            settings.secure_cookies,
+        ):
+            return jsonify({"error": "untrusted_exchange_origin"}), 403
 
         try:
-            identity = _verify_access_token(access_token)
+            identity = _verify_access_token(access_token, cookie_header)
         except requests.RequestException as exc:
             return jsonify({"error": "auth_unavailable", "details": str(exc)}), 502
 
