@@ -34,28 +34,10 @@ continuum_tenant_webots_replicas: 2
 continuum_tenant_webots_hpa_min_replicas: 2
 continuum_tenant_webots_hpa_max_replicas: 8
 
-# These are logical AARNN networks, not worker hosts. Several networks are
-# sharded across the same qc/sm worker fleet; each gets one embodied agent in
-# the shared world and AARNN resolves each network's live distributed placement.
+# These are logical AARNN networks, not worker hosts. The two networks that
+# currently exist are each represented by one embodied agent in the persistent
+# shared world; AARNN resolves their live distributed placement across qc/sm.
 simulation_environment_webots_network_bindings:
-  AARNN_NETWORK_CELEGANS_01:
-    network_id: celegans_01
-    sensor_regex: '^celegans_s_[0-9]{2}_.*$'
-    actuator_regex: '^celegans_o_[0-9]{3}_.*$'
-    expected_sensory: 24
-    expected_outputs: 96
-  AARNN_NETWORK_CELEGANS_02:
-    network_id: celegans_02
-    sensor_regex: '^celegans_s_[0-9]{2}_.*$'
-    actuator_regex: '^celegans_o_[0-9]{3}_.*$'
-    expected_sensory: 24
-    expected_outputs: 96
-  AARNN_NETWORK_HEXAPOD_01:
-    network_id: hexapod_01
-    sensor_regex: '^hex_s_[0-9]{2}_.*$'
-    actuator_regex: '^hex_o_[0-9]{3}_.*$'
-    expected_sensory: 34
-    expected_outputs: 18
   AARNN_NETWORK_SHARED_SNN:
     network_id: neuralmimicry-shared-snn
     # The AARNN shared SNN uses the generic 32/16 profile. Reuse the existing
@@ -81,12 +63,6 @@ simulation_environment_webots_activity_addr: ""
 # networks embodied in this shared scene. Removing a principal/network pair
 # and rolling aarnn-web-ui revokes that peripheral grant.
 simulation_environment_webots_peripheral_input_grants:
-  celegans_01:
-    - webots
-  celegans_02:
-    - webots
-  hexapod_01:
-    - webots
   neuralmimicry-shared-snn:
     - webots
   tenant-aarnn:
@@ -95,8 +71,8 @@ simulation_environment_webots_peripheral_input_grants:
 simulation_environment_webots_aarnn_namespace: aarnn
 simulation_environment_webots_aarnn_bearer_secret: nm-webots-sensory-ingress
 simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn_orchestrator_bearer
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:webots-20260930-bridge-orchestrator-arm64-64k-hwe"
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:webots-20260930-snapshot-metadata-orchestrator-arm64-64k-hwe"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.
-simulation_environment_webots_aarnn_engine_image: "{{ simulation_environment_webots_aarnn_orchestrator_image }}"
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:webots-20260930-snapshot-metadata-node-arm64-64k-hwe"
 simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:webots-20260930-secure-web-ui-arm64-64k-hwe"
