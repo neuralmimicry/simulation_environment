@@ -163,6 +163,7 @@
     argv:
       - ldconfig
       - -p
+  check_mode: false
   register: simulation_environment_webots_gpgme_cache
   changed_when: false
 
@@ -179,6 +180,7 @@
       - --show
       - --showformat=${Status} ${Version}
       - "{{ 'libopencv-videoio406t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libopencv-videoio406' }}"
+  check_mode: false
   register: simulation_environment_webots_opencv_videoio
   changed_when: false
 
