@@ -71,6 +71,7 @@ simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn
 # realistic headroom for this Webots-backed workload on qc01.
 simulation_environment_webots_aarnn_orchestrator_memory_request: 14Gi
 simulation_environment_webots_aarnn_orchestrator_memory_limit: 24Gi
+simulation_environment_webots_aarnn_orchestrator_threads: 2
 # Align persisted simulator-network snapshots against the deployed embodiment
 # dimensions before the orchestrator distributes them. This is the same
 # read-only startup contract mounted for the default AARNN network.

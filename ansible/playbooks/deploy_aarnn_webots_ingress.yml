@@ -23,6 +23,10 @@
                     value: "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
                   - name: NM_ORCHESTRATOR_STARTUP_IO_CONTRACT_NETWORK_IDS
                     value: "{{ simulation_environment_webots_aarnn_startup_io_contract_network_ids | join(',') }}"
+                  - name: RAYON_NUM_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
+                  - name: TOKIO_WORKER_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
                 resources:
                   requests:
                     memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_request }}"
@@ -34,6 +38,11 @@
           spec:
             containers:
               - name: orchestrator
+                env:
+                  - name: RAYON_NUM_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
+                  - name: TOKIO_WORKER_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
                 resources:
                   requests:
                     memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_request }}"
@@ -199,8 +208,11 @@
           - >-
             (simulation_environment_webots_aarnn_orchestrator_memory_request | regex_replace('Gi$', '') | int)
             < (simulation_environment_webots_aarnn_orchestrator_memory_limit | regex_replace('Gi$', '') | int)
+          - simulation_environment_webots_aarnn_orchestrator_threads | int > 0
+          - simulation_environment_webots_aarnn_orchestrator_threads | int <= 3
         fail_msg: >-
-          The Webots-backed AARNN orchestrator must request less memory than its configured limit.
+          The Webots-backed AARNN orchestrator must request less memory than its configured limit,
+          and its thread pools must fit within the 3-CPU container limit.
       tags: [webots_ingress_config, orchestrator_memory]
 
     - name: Apply the Webots shared-SNN orchestrator memory headroom before image rollout
