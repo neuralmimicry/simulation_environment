@@ -6,9 +6,11 @@ runtime_world="${NM_WEBOTS_RUNTIME_WORLD_FILE:?NM_WEBOTS_RUNTIME_WORLD_FILE is r
 source_world="${NM_WEBOTS_SOURCE_WORLD_FILE:?NM_WEBOTS_SOURCE_WORLD_FILE is required}"
 
 source_dir="$(cd "$(dirname "$source_world")/.." && pwd)"
+capabilities_file="${NM_WEBOTS_CAPABILITIES_FILE:-$source_dir/configs/robot_capabilities.json}"
 legacy_source_revision="$(
   {
     sha256sum "$source_world"
+    [[ ! -r "$capabilities_file" ]] || sha256sum "$capabilities_file"
     find "$source_dir/protos" -maxdepth 1 -type f -name '*.proto' -print0 \
       | sort -z \
       | xargs -0 -r sha256sum

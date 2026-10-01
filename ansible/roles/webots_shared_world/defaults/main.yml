@@ -15,6 +15,7 @@ simulation_environment_webots_state_dir: "{{ simulation_environment_webots_home 
 simulation_environment_webots_state_world: "{{ simulation_environment_webots_state_dir }}/shared_fleet_neuroworld.wbt"
 simulation_environment_webots_config_dir: /etc/neuralmimicry/webots
 simulation_environment_webots_fleet_config: "{{ simulation_environment_webots_config_dir }}/fleet.json"
+simulation_environment_webots_capabilities_file: "{{ simulation_environment_webots_repo_path }}/webots_world/configs/robot_capabilities.json"
 simulation_environment_webots_access_token_file: "{{ simulation_environment_webots_config_dir }}/aarnn_access_token"
 simulation_environment_webots_api_base: https://aarnn.neuralmimicry.ai/api
 simulation_environment_webots_activity_addr: ""

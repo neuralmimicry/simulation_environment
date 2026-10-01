@@ -19,6 +19,35 @@
       - simulation_environment_webots_source_stat.stat.exists | default(false)
     fail_msg: "Set SIMULATION_ENVIRONMENT_SRC to the simulation_environment checkout or run this play from that repository."
 
+- name: Read the shared-world robot capability contract
+  delegate_to: localhost
+  become: false
+  ansible.builtin.slurp:
+    src: "{{ simulation_environment_webots_local_repo }}/webots_world/configs/robot_capabilities.json"
+  register: simulation_environment_webots_capability_contract_raw
+
+- name: Parse the shared-world robot capability profiles
+  ansible.builtin.set_fact:
+    simulation_environment_webots_capability_contract: >-
+      {{ simulation_environment_webots_capability_contract_raw.content | b64decode | from_json }}
+    simulation_environment_webots_capability_profiles: >-
+      {{ (simulation_environment_webots_capability_contract_raw.content | b64decode | from_json).profiles }}
+    simulation_environment_webots_capability_slots: >-
+      {{ (simulation_environment_webots_capability_contract_raw.content | b64decode | from_json).slots }}
+
+- name: Validate each configured network against a known robot profile
+  ansible.builtin.assert:
+    that:
+      - item.key in simulation_environment_webots_capability_slots.keys() | list
+      - item.value.robot_profile is defined
+      - item.value.robot_profile in simulation_environment_webots_capability_profiles.keys() | list
+      - item.value.robot_profile == simulation_environment_webots_capability_slots[item.key]
+    fail_msg: "Network {{ item.key }} needs a robot_profile present in webots_world/configs/robot_capabilities.json."
+  loop: "{{ simulation_environment_webots_network_bindings | dict2items }}"
+  when:
+    - item.value.network_id is defined
+    - item.value.network_id | string | trim | length > 0
+
 - name: Check the reused AARNN device mapper header on the control node
   delegate_to: localhost
   become: false

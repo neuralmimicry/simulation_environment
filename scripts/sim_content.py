@@ -29,11 +29,17 @@ def habitat_objects(h):
         out.append(primitive(name, shape, p, s, c, **kw))
     floor = h['substrate']
     add('substrate', 'box', (0, 0, -.025), (2, 2, .05), floor, collision=True)
+    kind = h['id']
     height = h['wall_height']
-    # Low front rim leaves the habitat legible; three high sides preserve optic flow.
-    for i, (p,s) in enumerate([((0,1,height/2),(2,.025,height)),((0,-1,.035),(2,.025,.07)),
-                               ((1,0,height/2),(.025,2,height)),((-1,0,height/2),(.025,2,height))]):
-        add(f'rim_{i}', 'box', p, s, (.42,.5,.47), collision=True, material='stone')
+    if kind == 'stream':
+        # The stream is a pool inside one open landscape. Its north, east and
+        # west banks contain swim-only agents; the south shore remains open so
+        # amphibious agents can transition between the shared land and water.
+        for i, (p,s) in enumerate([((0,1,height/2),(2,.025,height)),((0,-1,.035),(2,.025,.07)),
+                                   ((1,0,height/2),(.025,2,height)),((-1,0,height/2),(.025,2,height))]):
+            if i == 1:
+                continue
+            add(f'rim_{i}', 'box', p, s, (.42,.5,.47), collision=True, material='stone')
     # Fixed low-discrepancy placement: repeatable microtexture, never a frame-time RNG.
     for i in range(56):
         x = ((i * 37 % 101) / 101 * 1.84) - .92
@@ -41,7 +47,6 @@ def habitat_objects(h):
         shade = .88 + (i % 5) * .04
         add(f'grain_{i:02}', 'sphere', (x,y,.003), (.015,.011,.006),
             tuple(min(1,v*shade) for v in floor), material='stone')
-    kind = h['id']
     if kind == 'agar':
         for i,(x,y,r) in enumerate([(.42,.2,.23),(-.48,-.24,.16),(.25,-.65,.13)]):
             add(f'bacterial_lawn_{i}', 'sphere', (x,y,.009), (r*2,r*1.6,.014),

@@ -5,15 +5,22 @@ Simulation environments and robot bridges for AARNN.
 
 `webots_world/worlds/shared_fleet_neuroworld.wbt` provides eight robot slots:
 two Celegans (24/96), one Hexapod (34/18), two generic-profile (32/16) slots
-using the existing Hexapod model with its camera channels excluded, and three
-future slots. The site profile binds only the logical networks listed below;
-a robot profile in the world does not imply that an AARNN network is active.
+using the existing Hexapod model with its camera channels excluded, a
+Drosophila, a Zebrafish, and one amphibious Celegans slot. The site profile
+binds only the logical networks listed below; a robot profile in the world
+does not imply that an AARNN network is active.
 Bindings follow network IDs rather than compute-host names, because each
 network may be distributed across several `qc` and `sm` nodes.
 The world reuses the AARNN `DeviceMapper` and habitat assets in
 `webots_world/protos/`. A supervisor animates wildlife, changes the light cycle,
-removes unbound robot slots from the physics scene, and writes a recoverable
-world snapshot every 30 seconds. Changing the configured fleet population
+removes unbound robot slots from the physics scene, enforces the selected
+profile's movement region, and writes a recoverable world snapshot every 30
+seconds. Agar, orchard, terrain, and room features open onto one continuous
+land surface. The freshwater stream has an open southern shore: amphibious
+robots can cross it, swimming-only robots are constrained to its water volume,
+land-only robots are returned to shore, and flight profiles are not clipped by
+land or water boundaries. The region and profile contract is
+`webots_world/configs/robot_capabilities.json`. Changing the configured fleet population
 reloads the source scene while preserving the ecological clock; robot poses
 return to their authored starting positions. The systemd service runs
 independently of browser sessions.
@@ -52,8 +59,11 @@ Keep the credential independent of a browser login. When its protected file is
 rotated, each robot controller reloads it after an HTTP 401 and retries the
 current request without restarting the shared world.
 To change the fleet, override `simulation_environment_webots_network_bindings`
-with the logical network ID, compatible device regexes, and exact input/output
-counts for each robot key, then keep its AARNN grant mapping in sync. The
+with the logical network ID, `robot_profile`, compatible device regexes, and
+exact input/output counts for each robot key, then keep its AARNN grant mapping
+in sync. Ansible checks each bound profile against
+`robot_capabilities.json`; the world supervisor uses that same profile to
+enforce its land, water, amphibious, or flight movement class. The
 Hexapod camera is sampled at 1x1 resolution to keep its two event channels
 aligned with the existing 34-channel AARNN profile. The C++
 bridge converts normalized sensor readings to raw AER spike indices locally,
