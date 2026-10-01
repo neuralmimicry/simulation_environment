@@ -282,6 +282,7 @@
         owner: root
         group: root
         mode: "0755"
+      register: simulation_environment_aarnn_node_binary_install
       notify: Restart the AARNN native worker
 
     - name: Remove the staged worker binary
@@ -324,6 +325,7 @@
           - "Successfully joined orchestrator at"
       register: simulation_environment_aarnn_node_rejoin
       changed_when: false
+      when: simulation_environment_aarnn_node_binary_install.changed
       until: >-
         simulation_environment_aarnn_node_rejoin.stdout is search(
           'Successfully joined orchestrator at')
