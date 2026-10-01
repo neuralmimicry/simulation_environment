@@ -72,7 +72,9 @@ simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn
 simulation_environment_webots_aarnn_startup_io_contract_path: /etc/aarnn/startup/default-network.json
 simulation_environment_webots_aarnn_startup_io_contract_network_ids:
   - neuralmimicry-shared-snn
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:6e0d7a3cf526d74d1bc4fb20508852c8d66f2066-orchestrator-arm64-64k-hwe"
+# Keep the existing control-plane image; this recovery changes worker command
+# handling and Web UI auth only, so the shared orchestrator does not need a roll.
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:f70078a35340c8c6799875c27eaa7eee603aa131-orchestrator-arm64-64k-hwe"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.
 simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:6e0d7a3cf526d74d1bc4fb20508852c8d66f2066-node-arm64-64k-hwe"
