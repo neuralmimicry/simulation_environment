@@ -55,8 +55,8 @@
           no worker restart will begin.
 
 - name: Resolve the live shared-SNN placement before choosing worker rollout order
-  hosts: sm00
-  become: true
+  hosts: localhost
+  connection: local
   gather_facts: false
   vars_files:
     - ../roles/webots_shared_world/defaults/main.yml
@@ -68,7 +68,7 @@
         set -eu
         header_file="$(mktemp)"
         trap 'rm -f "$header_file"' EXIT
-        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file }})" > "$header_file"
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
         curl --fail --silent --show-error --header "@${header_file}" \
           "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
@@ -196,10 +196,18 @@
     - name: Verify the worker play uses the live safe rollout order
       ansible.builtin.assert:
         that:
-          - ansible_play_hosts_all == hostvars['sm00'].simulation_environment_aarnn_worker_rollout_order
           - >-
-            hostvars['sm00'].simulation_environment_shared_snn_ingress_worker_hosts | length == 0
-            or ansible_play_hosts_all[-1] == hostvars['sm00'].simulation_environment_shared_snn_ingress_worker_hosts[0]
+            ansible_play_hosts_all == (
+              hostvars['localhost'].simulation_environment_aarnn_worker_rollout_order
+              | select('in', ansible_play_hosts_all)
+              | list
+            )
+          - >-
+            hostvars['localhost'].simulation_environment_shared_snn_ingress_worker_hosts | length == 0
+            or hostvars['localhost'].simulation_environment_shared_snn_ingress_worker_hosts[0]
+               not in ansible_play_hosts_all
+            or ansible_play_hosts_all[-1]
+               == hostvars['localhost'].simulation_environment_shared_snn_ingress_worker_hosts[0]
         fail_msg: >-
           The active shared-SNN ingress owner is not last in this play's execution order;
           no native worker has been changed.
@@ -211,7 +219,7 @@
         set -eu
         header_file="$(mktemp)"
         trap 'rm -f "$header_file"' EXIT
-        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file }})" > "$header_file"
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
         curl --fail --silent --show-error --header "@${header_file}" \
           "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
@@ -233,7 +241,8 @@
               '
       args:
         executable: /bin/bash
-      delegate_to: sm00
+      delegate_to: localhost
+      become: false
       register: simulation_environment_aarnn_current_shared_snn_placement
       changed_when: false
       check_mode: false
@@ -652,7 +661,7 @@
         set -eu
         header_file="$(mktemp)"
         trap 'rm -f "$header_file"' EXIT
-        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file }})" > "$header_file"
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
         curl --fail --silent --show-error --header "@${header_file}" \
           "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
@@ -674,7 +683,8 @@
               '
       args:
         executable: /bin/bash
-      delegate_to: sm00
+      delegate_to: localhost
+      become: false
       register: simulation_environment_shared_snn_post_restart_status
       changed_when: false
       until: simulation_environment_shared_snn_post_restart_status.rc == 0

@@ -6,6 +6,8 @@ continuum_tenant_webots_client_user: "pbisaacs"
 continuum_tenant_webots_image: "ghcr.io/neuralmimicry/webots:latest"
 continuum_tenant_webots_build_image: true
 continuum_tenant_webots_use_local_dev_source: true
+# Keep the status credential on the deployment controller for owner preflights
+# and install it on the Webots host through the shared-world role.
 simulation_environment_webots_access_token_file_source: >-
   {{
     lookup('env', 'AARNN_WEBOTS_ACCESS_TOKEN_FILE')
