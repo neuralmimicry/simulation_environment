@@ -28,6 +28,17 @@
                     memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_request }}"
                   limits:
                     memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_limit }}"
+    simulation_environment_webots_aarnn_orchestrator_memory_patch:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: orchestrator
+                resources:
+                  requests:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_request }}"
+                  limits:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_limit }}"
     simulation_environment_webots_aarnn_web_ui_patch:
       spec:
         template:
@@ -190,7 +201,38 @@
             < (simulation_environment_webots_aarnn_orchestrator_memory_limit | regex_replace('Gi$', '') | int)
         fail_msg: >-
           The Webots-backed AARNN orchestrator must request less memory than its configured limit.
-      tags: [webots_ingress_config]
+      tags: [webots_ingress_config, orchestrator_memory]
+
+    - name: Apply the Webots shared-SNN orchestrator memory headroom before image rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --type=strategic
+          - --patch
+          - "{{ simulation_environment_webots_aarnn_orchestrator_memory_patch | to_json }}"
+      register: simulation_environment_webots_aarnn_orchestrator_memory_patch_result
+      changed_when: >-
+        not simulation_environment_webots_aarnn_orchestrator_memory_patch_result.stdout.endswith('not patched')
+      tags: [orchestrator_memory]
+
+    - name: Wait for the shared-SNN orchestrator memory rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --timeout=10m
+      changed_when: false
+      tags: [orchestrator_memory]
 
     - name: Verify the orchestrator I/O contract is readable before patching
       ansible.builtin.command:
