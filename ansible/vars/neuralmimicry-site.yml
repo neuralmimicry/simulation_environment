@@ -75,5 +75,5 @@ simulation_environment_webots_aarnn_startup_io_contract_network_ids:
 simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:f70078a35340c8c6799875c27eaa7eee603aa131-orchestrator-arm64-64k-hwe"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.
-simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:f70078a35340c8c6799875c27eaa7eee603aa131-node-arm64-64k-hwe"
-simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:f70078a35340c8c6799875c27eaa7eee603aa131-web-ui-arm64-64k-hwe"
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:7bd816b1c89545a20120dbf21018c11c4db6f858-node-arm64-64k-hwe"
+simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:7bd816b1c89545a20120dbf21018c11c4db6f858-web-ui-arm64-64k-hwe"
