@@ -1,4 +1,27 @@
 ---
+- name: Confirm the shared-SNN recovery snapshot exists before rolling workers
+  hosts: aarnn_control
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check that a nonempty shared-SNN snapshot is available in the AARNN workspace
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/rancher/k3s/k3s.yaml
+          - --namespace
+          - aarnn
+          - exec
+          - deployment/aarnn-web-ui
+          - --
+          - test
+          - -s
+          - /var/lib/aarnn/runtime/users/system/workspaces/neuralmimicry-shared-snn/latest.snapshot.json
+      register: simulation_environment_shared_snn_snapshot_check
+      changed_when: false
+      failed_when: simulation_environment_shared_snn_snapshot_check.rc != 0
+
 - name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
   # qc00 is offline and qc05 has no active native worker service. qc01's engine
   # DaemonSet is updated with the ingress images instead of this native play.
@@ -242,6 +265,15 @@
         mode: "0755"
         force: false
 
+    - name: Capture the worker restart timestamp for the rejoin check
+      ansible.builtin.command:
+        argv:
+          - date
+          - --utc
+          - --iso-8601=seconds
+      register: simulation_environment_aarnn_node_restart_started
+      changed_when: false
+
     - name: Install the Webots-capable worker binary
       ansible.builtin.copy:
         src: /tmp/aarnn_rust.webots-ingress
@@ -277,6 +309,26 @@
       changed_when: false
       register: simulation_environment_aarnn_node_after
       failed_when: simulation_environment_aarnn_node_after.stdout != "active"
+
+    - name: Wait for this worker to rejoin the AARNN orchestrator
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - --unit
+          - "{{ simulation_environment_aarnn_node_service }}"
+          - --since
+          - "{{ simulation_environment_aarnn_node_restart_started.stdout }}"
+          - --no-pager
+          - --output=cat
+          - --grep
+          - "Successfully joined orchestrator at"
+      register: simulation_environment_aarnn_node_rejoin
+      changed_when: false
+      until: >-
+        simulation_environment_aarnn_node_rejoin.stdout is search(
+          'Successfully joined orchestrator at')
+      retries: 45
+      delay: 2
 
   handlers:
     - name: Restart the AARNN native worker

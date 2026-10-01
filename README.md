@@ -153,12 +153,14 @@ AARNN_NODE_BINARY_AARCH64=/path/to/aarch64-target/aarch64-unknown-linux-gnu/rele
 ```
 
 The worker playbook checks that both local files match their declared
-architectures, selects the matching binary for each host, and requires each
-listed native service to be active before replacement. It stores a root-owned
-rollback copy and waits for the gRPC port after each serial restart. The
-current inventory covers `qc02`–`qc04` and `sm00`–`sm01`. In the 2026-09-30
-host check, `qc00` did not accept SSH and `qc05` was reachable but had no
-active `aarnn-node.service`; neither is currently in the native worker rollout.
+architectures, verifies the shared-SNN workspace snapshot exists, selects the
+matching binary for each host, and requires each listed native service to be
+active before replacement. It stores a root-owned rollback copy, waits for the
+gRPC port, and confirms that each worker rejoined the orchestrator before
+moving to the next host. The current inventory covers `qc02`–`qc04` and
+`sm00`–`sm01`. In the 2026-09-30 host check, `qc00` did not accept SSH and
+`qc05` was reachable but had no active `aarnn-node.service`; neither is
+currently in the native worker rollout.
 The separate Kubernetes `aarnn-engine` workload on `qc01` is managed through
 its DaemonSet rather than this native-worker playbook.
 
