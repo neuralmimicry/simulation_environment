@@ -342,6 +342,7 @@
           - "{{ simulation_environment_webots_aarnn_orchestrator_patch | to_json }}"
       register: simulation_environment_webots_aarnn_orchestrator_patch_result
       changed_when: "not simulation_environment_webots_aarnn_orchestrator_patch_result.stdout.endswith('not patched')"
+      tags: [webots_orchestrator_rollout]
 
     - name: Roll only the AARNN Web UI with its scoped Webots grants
       ansible.builtin.command:
@@ -385,6 +386,7 @@
           - "{{ simulation_environment_webots_aarnn_namespace }}"
           - --timeout=10m
       changed_when: false
+      tags: [webots_orchestrator_rollout]
 
     - name: Wait for the AARNN Web UI rollout
       ansible.builtin.command:
