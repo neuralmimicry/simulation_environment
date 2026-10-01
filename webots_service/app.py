@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 from flask import Flask, Response, abort, current_app, jsonify, redirect, render_template_string, request, session, url_for
@@ -667,6 +667,28 @@ def _trusted_exchange_origin(
     return parsed.hostname.lower() in {value.lower() for value in trusted_hosts}
 
 
+def _access_exchange_failure(error: str, status: int, details: str = "") -> Response:
+    payload: Dict[str, Any] = {"error": error}
+    if details and request.is_json:
+        payload["details"] = details
+    response = jsonify(payload)
+    response.status_code = status
+
+    origin = request.headers.get("Origin", "").strip()
+    is_browser_form = not request.is_json and request.accept_mimetypes.accept_html
+    if is_browser_form and origin and _trusted_exchange_origin(
+        origin,
+        _settings().site_base_url,
+        request.host,
+        _settings().secure_cookies,
+    ):
+        return redirect(
+            f"{_settings().site_base_url}/webots?{urlencode({'webots_error': error})}",
+            code=303,
+        )
+    return response
+
+
 def _catalog() -> Dict[str, Dict[str, Any]]:
     return current_app.extensions["webots_catalog"]
 
@@ -897,26 +919,27 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             next_path = _safe_next_path(request.form.get("next") or request.values.get("next"))
 
         cookie_header = request.headers.get("Cookie", "").strip()
+        origin = request.headers.get("Origin", "").strip()
         if not access_token and not cookie_header:
-            return jsonify({"error": "access_token_or_session_required"}), 401
-        if cookie_header and not _trusted_exchange_origin(
-            request.headers.get("Origin", ""),
+            return _access_exchange_failure("unauthorized", 401)
+        if (cookie_header or origin) and not _trusted_exchange_origin(
+            origin,
             settings.site_base_url,
             request.host,
             settings.secure_cookies,
         ):
-            return jsonify({"error": "untrusted_exchange_origin"}), 403
+            return _access_exchange_failure("untrusted_exchange_origin", 403)
 
         try:
             identity = _verify_access_token(access_token, cookie_header)
         except requests.RequestException as exc:
-            return jsonify({"error": "auth_unavailable", "details": str(exc)}), 502
+            return _access_exchange_failure("auth_unavailable", 502, str(exc))
 
         if not identity.get("authenticated"):
-            return jsonify({"error": "unauthorized"}), 401
+            return _access_exchange_failure("unauthorized", 401)
 
         if not _identity_can_use_webots(identity):
-            return jsonify({"error": "webots_use_access_required"}), 403
+            return _access_exchange_failure("webots_use_access_required", 403)
 
         session["user"] = str(identity.get("user") or "").strip()
         session["role"] = str(identity.get("role") or "").strip() or None
@@ -932,7 +955,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
         if request.is_json:
             return jsonify({"status": "ok", "next": next_path, **_session_identity()})
-        return redirect(next_path)
+        return redirect(next_path, code=303)
 
     @app.route("/auth/logout")
     def logout() -> Response:
