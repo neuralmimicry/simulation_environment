@@ -7,7 +7,7 @@ using nm_webots::Mobility;
 using nm_webots::Position;
 
 int main() {
-  const Bounds3d water{2.82, 7.38, -2.28, 2.28, 0.06, 1.35};
+  const Bounds3d water{2.82, 7.38, -2.28, 2.28, 0.06, 0.44};
 
   Position land_on_shared_ground{0.0, 4.0, 0.19};
   assert(!nm_webots::constrain_position(land_on_shared_ground, Mobility::Land, water));

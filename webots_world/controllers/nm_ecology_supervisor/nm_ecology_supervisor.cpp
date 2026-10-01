@@ -255,7 +255,7 @@ int main() {
   Supervisor supervisor;
   const int step_ms = static_cast<int>(supervisor.getBasicTimeStep());
   RobotMobility mobility_by_robot;
-  Bounds3d water_bounds{2.82, 7.38, -2.28, 2.28, 0.06, 1.35};
+  Bounds3d water_bounds{2.82, 7.38, -2.28, 2.28, 0.06, 0.44};
   remove_unbound_robots(
       supervisor, env_or("NM_WEBOTS_FLEET_CONFIG", "/etc/neuralmimicry/webots/fleet.json"),
       env_or("NM_WEBOTS_CAPABILITIES_FILE",
