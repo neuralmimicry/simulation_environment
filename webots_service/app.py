@@ -796,15 +796,28 @@ def _verify_access_token(access_token: str, cookie_header: str = "") -> Dict[str
         # valid site session can complete the handoff after a cached bearer
         # token has expired or been cleared.
         headers["Cookie"] = cookie_header
-    response = requests.get(
-        f"{base}/api/session",
-        headers=headers,
-        timeout=_settings().central_auth_timeout_secs,
-    )
-    if response.status_code in (408, 425, 429) or response.status_code >= 500:
-        raise requests.HTTPError(
-            f"central auth returned HTTP {response.status_code}", response=response
+
+    def fetch_session(request_headers: Dict[str, str]) -> requests.Response:
+        response = requests.get(
+            f"{base}/api/session",
+            headers=request_headers,
+            timeout=_settings().central_auth_timeout_secs,
         )
+        if response.status_code in (408, 425, 429) or response.status_code >= 500:
+            raise requests.HTTPError(
+                f"central auth returned HTTP {response.status_code}", response=response
+            )
+        return response
+
+    response = fetch_session(headers)
+    if response.status_code == 401 and access_token and cookie_header:
+        # An expired cached bearer must not hide a still-valid shared browser
+        # session. Retry that case with the cookie alone; do not retry backend
+        # failures as if they were credential rejection.
+        cookie_only_headers = {
+            key: value for key, value in headers.items() if key != "Authorization"
+        }
+        response = fetch_session(cookie_only_headers)
     if response.status_code >= 400:
         return {"authenticated": False}
     try:
