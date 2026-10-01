@@ -22,10 +22,30 @@
       changed_when: false
       failed_when: simulation_environment_shared_snn_snapshot_check.rc != 0
 
+- name: Verify the serial worker rollout order before touching any worker
+  hosts: "qc02:qc03:qc04:sm00:sm01"
+  order: sorted
+  gather_facts: false
+  tasks:
+    - name: Assert the sole shared-SNN owner is the final sorted worker
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'qc02'
+          - >-
+            ansible_play_hosts_all | sort
+            == ['qc02', 'qc03', 'qc04', 'sm00', 'sm01']
+        fail_msg: >-
+          The native worker rollout must run qc02, qc03, qc04 and sm00 before
+          sm01, the current sole owner of neuralmimicry-shared-snn.
+      run_once: true
+      tags: [rollout_order_preflight]
+
 - name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
   # qc00 is offline and qc05 has no active native worker service. qc01's engine
   # DaemonSet is updated with the ingress images instead of this native play.
+  # Sort hostnames so the active shared-SNN owner, sm01, is rolled last.
   hosts: "qc02:qc03:qc04:sm00:sm01"
+  order: sorted
   become: true
   serial: 1
   gather_facts: true
