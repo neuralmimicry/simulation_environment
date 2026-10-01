@@ -1,0 +1,8 @@
+{
+  "num_sensory_neurons": 32,
+  "num_hidden_layers": 6,
+  "num_output_neurons": 16,
+  "spike_io": {
+    "profile": "hexapod_shared_32x16"
+  }
+}
