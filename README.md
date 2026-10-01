@@ -152,6 +152,15 @@ AARNN_NODE_BINARY_AARCH64=/path/to/aarch64-target/aarch64-unknown-linux-gnu/rele
   ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini playbooks/deploy_aarnn_sensory_workers.yml
 ```
 
+To inspect the live owner and rollout order without restarting a worker, run
+the tagged preflight in check mode:
+
+```sh
+cd /home/pbisaacs/Developer/neuralmimicry/simulation_environment/ansible
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini \
+  playbooks/deploy_aarnn_sensory_workers.yml --tags rollout_order_preflight --check
+```
+
 The worker playbook checks that both local files match their declared
 architectures, verifies the shared-SNN workspace snapshot exists, selects the
 matching binary for each host, and requires each listed native service to be

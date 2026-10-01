@@ -116,6 +116,7 @@
         simulation_environment_shared_snn_external_ingress_node_ids: >-
           {{ (simulation_environment_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids
              | reject('match', '^native-') | list }}
+      tags: [rollout_order_preflight]
 
     - name: Build the safe rollout order from the live network placement
       ansible.builtin.set_fact:
@@ -128,6 +129,7 @@
                 | reject('in', simulation_environment_shared_snn_ingress_worker_hosts)
                 | list)
              + simulation_environment_shared_snn_ingress_worker_hosts }}
+      tags: [rollout_order_preflight]
 
     - name: Refuse a worker rollout unless it preserves the active shared-SNN ingress owner
       ansible.builtin.assert:
