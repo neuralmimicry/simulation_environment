@@ -22,30 +22,92 @@
       changed_when: false
       failed_when: simulation_environment_shared_snn_snapshot_check.rc != 0
 
-- name: Verify the serial worker rollout order before touching any worker
-  hosts: "qc02:qc03:qc04:sm00:sm01"
-  order: sorted
+- name: Resolve the live shared-SNN placement before choosing worker rollout order
+  hosts: sm00
+  become: true
   gather_facts: false
+  vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
+    - ../vars/neuralmimicry-site.yml
+  tags: [shared_snn_placement_preflight]
   tasks:
-    - name: Assert the sole shared-SNN owner is the final sorted worker
+    - name: Read active shared-SNN owners and sensory ingress owner
+      ansible.builtin.shell: |
+        set -eu
+        header_file="$(mktemp)"
+        trap 'rm -f "$header_file"' EXIT
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file }})" > "$header_file"
+        curl --fail --silent --show-error --header "@${header_file}" \
+          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+          | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
+              [.networks[] | select(.network_id == $network_id)] as $matches
+              | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
+                else
+                  ($matches[0].distribution // []) as $distribution
+                  | {
+                      active_node_ids: ($distribution | map(.node_id) | unique | sort),
+                      sensory_ingress_node_ids: (
+                        $distribution
+                        | map(select((.layers // []) | index(0)) | .node_id)
+                        | unique
+                        | sort
+                      )
+                    }
+                end
+              '
+      args:
+        executable: /bin/bash
+      register: simulation_environment_shared_snn_placement
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Convert live AARNN node IDs into worker inventory names
+      ansible.builtin.set_fact:
+        simulation_environment_shared_snn_active_worker_hosts: >-
+          {{ (simulation_environment_shared_snn_placement.stdout | from_json).active_node_ids
+             | map('regex_replace', '^native-', '') | list }}
+        simulation_environment_shared_snn_ingress_worker_hosts: >-
+          {{ (simulation_environment_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids
+             | map('regex_replace', '^native-', '') | list }}
+
+    - name: Build the safe rollout order from the live network placement
+      ansible.builtin.set_fact:
+        simulation_environment_aarnn_worker_rollout_order: >-
+          {{ (groups['aarnn_sensory_workers']
+              | difference(simulation_environment_shared_snn_active_worker_hosts)
+              | sort)
+             + (simulation_environment_shared_snn_active_worker_hosts
+                | difference(simulation_environment_shared_snn_ingress_worker_hosts)
+                | sort)
+             + simulation_environment_shared_snn_ingress_worker_hosts }}
+
+    - name: Refuse a worker rollout unless it preserves the active shared-SNN ingress owner
       ansible.builtin.assert:
         that:
-          - inventory_hostname == 'qc02'
-          - >-
-            ansible_play_hosts_all | sort
-            == ['qc02', 'qc03', 'qc04', 'sm00', 'sm01']
+          - simulation_environment_shared_snn_active_worker_hosts | length >= 2
+          - simulation_environment_shared_snn_ingress_worker_hosts | length == 1
+          - simulation_environment_shared_snn_ingress_worker_hosts[0] in simulation_environment_shared_snn_active_worker_hosts
+          - simulation_environment_shared_snn_active_worker_hosts | difference(groups['aarnn_sensory_workers']) | length == 0
+          - simulation_environment_aarnn_worker_rollout_order | length == groups['aarnn_sensory_workers'] | length
+          - simulation_environment_aarnn_worker_rollout_order == groups['aarnn_sensory_workers']
         fail_msg: >-
-          The native worker rollout must run qc02, qc03, qc04 and sm00 before
-          sm01, the current sole owner of neuralmimicry-shared-snn.
+          The live shared-SNN placement is not safely represented by the ordered worker inventory.
+          Active workers={{ simulation_environment_shared_snn_active_worker_hosts | default([]) }};
+          sensory ingress owners={{ simulation_environment_shared_snn_ingress_worker_hosts | default([]) }};
+          required rollout={{ simulation_environment_aarnn_worker_rollout_order | default([]) }}.
+          Update the inventory order so inactive workers run first, active non-ingress workers next,
+          and the current layer-0 sensory ingress owner last.
       run_once: true
       tags: [rollout_order_preflight]
 
 - name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
   # qc00 is offline and qc05 has no active native worker service. qc01's engine
   # DaemonSet is updated with the ingress images instead of this native play.
-  # Sort hostnames so the active shared-SNN owner, sm01, is rolled last.
-  hosts: "qc02:qc03:qc04:sm00:sm01"
-  order: sorted
+  # The placement preflight requires this inventory order to put the live
+  # layer-0 sensory ingress owner last.
+  hosts: aarnn_sensory_workers
+  order: inventory
   become: true
   serial: 1
   gather_facts: true
@@ -56,6 +118,17 @@
     simulation_environment_aarnn_node_service: aarnn-node.service
     simulation_environment_aarnn_node_port: 50051
   pre_tasks:
+    - name: Verify the worker play uses the live safe rollout order
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all == hostvars['sm00'].simulation_environment_aarnn_worker_rollout_order
+          - ansible_play_hosts_all[-1] == hostvars['sm00'].simulation_environment_shared_snn_ingress_worker_hosts[0]
+        fail_msg: >-
+          The active shared-SNN ingress owner is not last in this play's execution order;
+          no native worker has been changed.
+      run_once: true
+      tags: [rollout_order_preflight]
+
     - name: Require release binaries for both active worker architectures
       ansible.builtin.assert:
         that:
@@ -351,6 +424,41 @@
           'Successfully joined orchestrator at')
       retries: 45
       delay: 2
+
+    - name: Confirm the shared SNN is still active before proceeding to the next worker
+      ansible.builtin.shell: |
+        set -eu
+        header_file="$(mktemp)"
+        trap 'rm -f "$header_file"' EXIT
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file }})" > "$header_file"
+        curl --fail --silent --show-error --header "@${header_file}" \
+          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+          | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
+              [.networks[] | select(.network_id == $network_id)] as $matches
+              | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
+                elif ($matches[0].playing != true
+                      or ($matches[0].total_neurons // 0) < 1
+                      or (($matches[0].distribution // []) | length) < 1)
+                  then error("shared-SNN is not running after worker restart")
+                else
+                  {
+                    network_id: $matches[0].network_id,
+                    playing: $matches[0].playing,
+                    current_dt: $matches[0].current_dt,
+                    total_neurons: $matches[0].total_neurons,
+                    active_nodes: ($matches[0].distribution | map(.node_id) | unique | sort)
+                  }
+                end
+              '
+      args:
+        executable: /bin/bash
+      delegate_to: sm00
+      register: simulation_environment_shared_snn_post_restart_status
+      changed_when: false
+      until: simulation_environment_shared_snn_post_restart_status.rc == 0
+      retries: 30
+      delay: 2
+      no_log: true
 
   handlers:
     - name: Restart the AARNN native worker
