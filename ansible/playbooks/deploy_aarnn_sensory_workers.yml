@@ -264,8 +264,8 @@
             )
         fail_msg: >-
           The live shared-SNN sensory ingress owner moved ahead of this serial worker update.
-            No change was made to {{ inventory_hostname }}; refresh the worker inventory order
-            from the current AARNN status and retry.
+            No change was made to {{ inventory_hostname }}; rerun after placement settles to
+            derive a new safe worker order from current AARNN status.
       tags: [rollout_order_preflight]
 
     - name: Require release binaries for both active worker architectures

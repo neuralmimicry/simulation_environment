@@ -157,7 +157,11 @@ architectures, verifies the shared-SNN workspace snapshot exists, selects the
 matching binary for each host, and requires each listed native service to be
 active before replacement. It stores a root-owned rollback copy, waits for the
 gRPC port, and confirms that each worker rejoined the orchestrator before
-moving to the next host. The current inventory covers `qc02`–`qc04` and
+moving to the next host. Before rollout, it reads the live `/api/status` and
+builds a temporary host order with inactive workers first, active non-ingress
+workers next, and the current sensory ingress owner last. It checks placement
+again before every worker restart and stops before touching a host if that
+owner moves ahead in the sequence. The current inventory covers `qc02`–`qc04` and
 `sm00`–`sm01`. In the 2026-09-30 host check, `qc00` did not accept SSH and
 `qc05` was reachable but had no active `aarnn-node.service`; neither is
 currently in the native worker rollout.
