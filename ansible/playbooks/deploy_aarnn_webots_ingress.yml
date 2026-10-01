@@ -260,6 +260,7 @@
           - -r
           - "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
       changed_when: false
+      tags: [webots_orchestrator_rollout]
 
     - name: Create the protected AARNN bearer-token directory
       ansible.builtin.file:
