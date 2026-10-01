@@ -72,6 +72,9 @@ simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn
 simulation_environment_webots_aarnn_startup_io_contract_path: /etc/aarnn/startup/default-network.json
 simulation_environment_webots_aarnn_startup_io_contract_network_ids:
   - neuralmimicry-shared-snn
+simulation_environment_aarnn_orchestrator_addr: "http://192.168.1.61:50051"
+simulation_environment_aarnn_node_io_config_path: /etc/aarnn/shared-snn-network.json
+simulation_environment_aarnn_node_service_dropin: /etc/systemd/system/aarnn-node.service.d/20-shared-snn-io.conf
 # Keep the existing control-plane image; this recovery changes worker command
 # handling and Web UI auth only, so the shared orchestrator does not need a roll.
 simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:f70078a35340c8c6799875c27eaa7eee603aa131-orchestrator-arm64-64k-hwe"

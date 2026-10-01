@@ -3,6 +3,9 @@
   hosts: aarnn_control
   become: true
   gather_facts: false
+  vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
+    - ../vars/neuralmimicry-site.yml
   tasks:
     - name: Check that a nonempty shared-SNN snapshot is available in the AARNN workspace
       ansible.builtin.command:
@@ -21,6 +24,35 @@
       register: simulation_environment_shared_snn_snapshot_check
       changed_when: false
       failed_when: simulation_environment_shared_snn_snapshot_check.rc != 0
+
+    - name: Read the canonical shared-SNN startup I/O contract
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/rancher/k3s/k3s.yaml
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - exec
+          - deployment/aarnn-orchestrator
+          - --
+          - cat
+          - "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
+      register: simulation_environment_aarnn_shared_snn_io_contract
+      changed_when: false
+
+    - name: Require the canonical worker contract to match the embodied SNN dimensions
+      ansible.builtin.assert:
+        that:
+          - >-
+            (simulation_environment_aarnn_shared_snn_io_contract.stdout | from_json).num_sensory_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_sensory | int
+          - >-
+            (simulation_environment_aarnn_shared_snn_io_contract.stdout | from_json).num_output_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_outputs | int
+        fail_msg: >-
+          The control-plane startup contract does not match the shared Webots embodiment;
+          no worker restart will begin.
 
 - name: Resolve the live shared-SNN placement before choosing worker rollout order
   hosts: sm00
@@ -143,6 +175,7 @@
     simulation_environment_aarnn_node_binary_path: /usr/bin/aarnn_rust
     simulation_environment_aarnn_node_service: aarnn-node.service
     simulation_environment_aarnn_node_port: 50051
+    simulation_environment_aarnn_node_id: "native-{{ inventory_hostname }}"
   pre_tasks:
     - name: Verify the worker play uses the live safe rollout order
       ansible.builtin.assert:
@@ -463,6 +496,42 @@
       register: simulation_environment_aarnn_node_restart_started
       changed_when: false
 
+    - name: Ensure the shared-SNN worker config directory exists
+      ansible.builtin.file:
+        path: "{{ simulation_environment_aarnn_node_io_config_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure the AARNN worker service drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ simulation_environment_aarnn_node_service_dropin | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the canonical shared-SNN startup I/O config for this worker
+      ansible.builtin.copy:
+        content: "{{ hostvars['spirit'].simulation_environment_aarnn_shared_snn_io_contract.stdout }}\n"
+        dest: "{{ simulation_environment_aarnn_node_io_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: simulation_environment_aarnn_node_io_config_install
+      notify: Restart the AARNN native worker
+
+    - name: Install the shared-SNN worker service config override
+      ansible.builtin.template:
+        src: ../roles/webots_shared_world/templates/aarnn-node-shared-snn.service.conf.j2
+        dest: "{{ simulation_environment_aarnn_node_service_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: simulation_environment_aarnn_node_service_override
+      notify: Restart the AARNN native worker
+
     - name: Install the Webots-capable worker binary
       ansible.builtin.copy:
         src: /tmp/aarnn_rust.webots-ingress
@@ -473,6 +542,13 @@
         mode: "0755"
       register: simulation_environment_aarnn_node_binary_install
       notify: Restart the AARNN native worker
+
+    - name: Record whether the worker requires a restart
+      ansible.builtin.set_fact:
+        simulation_environment_aarnn_node_restart_required: >-
+          {{ simulation_environment_aarnn_node_binary_install.changed
+             or simulation_environment_aarnn_node_io_config_install.changed
+             or simulation_environment_aarnn_node_service_override.changed }}
 
     - name: Remove the staged worker binary
       ansible.builtin.file:
@@ -500,6 +576,40 @@
       register: simulation_environment_aarnn_node_after
       failed_when: simulation_environment_aarnn_node_after.stdout != "active"
 
+    - name: Read the installed shared-SNN worker I/O config
+      ansible.builtin.command:
+        argv:
+          - cat
+          - "{{ simulation_environment_aarnn_node_io_config_path }}"
+      register: simulation_environment_aarnn_node_installed_io_config
+      changed_when: false
+
+    - name: Require the worker startup I/O dimensions to match the shared embodiment
+      ansible.builtin.assert:
+        that:
+          - >-
+            (simulation_environment_aarnn_node_installed_io_config.stdout | from_json).num_sensory_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_sensory | int
+          - >-
+            (simulation_environment_aarnn_node_installed_io_config.stdout | from_json).num_output_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_outputs | int
+
+    - name: Confirm the worker service uses the shared-SNN I/O config
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - --property=ExecStart
+          - --value
+          - "{{ simulation_environment_aarnn_node_service }}"
+      register: simulation_environment_aarnn_node_exec_start
+      changed_when: false
+
+    - name: Require the worker service to load the shared-SNN I/O config
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_node_io_config_path in simulation_environment_aarnn_node_exec_start.stdout
+
     - name: Wait for this worker to rejoin the AARNN orchestrator
       ansible.builtin.command:
         argv:
@@ -514,7 +624,7 @@
           - "Successfully joined orchestrator at"
       register: simulation_environment_aarnn_node_rejoin
       changed_when: false
-      when: simulation_environment_aarnn_node_binary_install.changed
+      when: simulation_environment_aarnn_node_restart_required | bool
       until: >-
         simulation_environment_aarnn_node_rejoin.stdout is search(
           'Successfully joined orchestrator at')
@@ -561,3 +671,4 @@
       ansible.builtin.systemd:
         name: "{{ simulation_environment_aarnn_node_service }}"
         state: restarted
+        daemon_reload: true

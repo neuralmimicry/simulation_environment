@@ -1,0 +1,3 @@
+[Service]
+ExecStart=
+ExecStart={{ simulation_environment_aarnn_node_binary_path }} --node --node-id {{ simulation_environment_aarnn_node_id }} --grpc-addr 0.0.0.0:50051 --orchestrator-addr {{ simulation_environment_aarnn_orchestrator_addr }} --brain-id {{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].network_id }} --config {{ simulation_environment_aarnn_node_io_config_path }}
