@@ -73,6 +73,13 @@ simulation_environment_webots_simulation_ingress_principals:
 simulation_environment_webots_aarnn_namespace: aarnn
 simulation_environment_webots_aarnn_bearer_secret: nm-webots-sensory-ingress
 simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn_orchestrator_bearer
+# Align persisted simulator-network snapshots against the deployed embodiment
+# dimensions before the orchestrator distributes them. This is the same
+# read-only startup contract mounted for the default AARNN network.
+simulation_environment_webots_aarnn_startup_io_contract_path: /etc/aarnn/startup/default-network.json
+simulation_environment_webots_aarnn_startup_io_contract_network_ids:
+  - neuralmimicry-shared-snn
+  - tenant-aarnn
 simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-orchestrator-arm64-64k-hwe"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.

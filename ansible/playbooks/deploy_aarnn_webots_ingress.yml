@@ -1,6 +1,6 @@
 ---
 - name: Deploy the scoped AARNN Webots sensory ingress
-  hosts: rk1
+  hosts: aarnn_control
   become: true
   vars_files:
     - ../vars/neuralmimicry-site.yml
@@ -19,6 +19,10 @@
                       secretKeyRef:
                         name: "{{ simulation_environment_webots_aarnn_bearer_secret }}"
                         key: NM_ORCHESTRATOR_BEARER_TOKEN
+                  - name: NM_ORCHESTRATOR_STARTUP_IO_CONTRACT
+                    value: "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
+                  - name: NM_ORCHESTRATOR_STARTUP_IO_CONTRACT_NETWORK_IDS
+                    value: "{{ simulation_environment_webots_aarnn_startup_io_contract_network_ids | join(',') }}"
     simulation_environment_webots_aarnn_web_ui_patch:
       spec:
         template:
@@ -137,6 +141,54 @@
           | list
         }}
       tags: [webots_ingress_config]
+
+    - name: Require the startup I/O contract to use the mounted AARNN config
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_aarnn_startup_io_contract_path is string
+          - simulation_environment_webots_aarnn_startup_io_contract_path.startswith('/etc/aarnn/startup/')
+          - simulation_environment_webots_aarnn_startup_io_contract_path.endswith('.json')
+        fail_msg: "The orchestrator startup I/O contract must point to a mounted AARNN startup JSON config."
+      tags: [webots_ingress_config]
+
+    - name: Require the startup I/O contract IDs to match embodied Webots networks
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_aarnn_startup_io_contract_network_ids is sequence
+          - simulation_environment_webots_aarnn_startup_io_contract_network_ids is not string
+          - simulation_environment_webots_aarnn_startup_io_contract_network_ids | length > 0
+          - >-
+            (
+              simulation_environment_webots_aarnn_startup_io_contract_network_ids
+              | difference(
+                  simulation_environment_webots_network_bindings
+                  | dict2items
+                  | selectattr('value.network_id', 'defined')
+                  | map(attribute='value.network_id')
+                  | map('string')
+                  | map('trim')
+                  | reject('equalto', '')
+                  | list
+                )
+              | length
+            ) == 0
+        fail_msg: "Startup I/O contracts may target only the networks represented in the shared Webots world."
+      tags: [webots_ingress_config]
+
+    - name: Verify the orchestrator I/O contract is readable before patching
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - exec
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --
+          - test
+          - -r
+          - "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
+      changed_when: false
 
     - name: Create the protected AARNN bearer-token directory
       ansible.builtin.file:

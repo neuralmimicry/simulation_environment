@@ -153,6 +153,7 @@
       - libxtst6
       - libsndio7.0
       - "{{ 'libgpgme11t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libgpgme11' }}"
+      - "{{ 'libopencv-videoio406t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libopencv-videoio406' }}"
     state: present
     update_cache: true
     cache_valid_time: 3600
@@ -170,6 +171,24 @@
     that:
       - "'libgpgme.so.11' in simulation_environment_webots_gpgme_cache.stdout"
     fail_msg: "{{ inventory_hostname }} does not expose libgpgme.so.11 after the runtime package installation."
+
+- name: Verify that the OpenCV 4.6 video I/O runtime is installed
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - --show
+      - --showformat=${Status} ${Version}
+      - "{{ 'libopencv-videoio406t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libopencv-videoio406' }}"
+  register: simulation_environment_webots_opencv_videoio
+  changed_when: false
+
+- name: Require the OpenCV 4.6 video I/O runtime on Webots hosts
+  ansible.builtin.assert:
+    that:
+      - simulation_environment_webots_opencv_videoio.stdout is search('install ok installed 4[.]6[.]0')
+    fail_msg: >-
+      {{ inventory_hostname }} does not have the OpenCV 4.6 video-I/O runtime
+      required by the Webots robot controller stack.
 
 - name: Create the Cyberbotics APT keyring directory
   ansible.builtin.file:

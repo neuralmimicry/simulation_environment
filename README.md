@@ -163,7 +163,18 @@ same Prepare/Commit RPCs. The control API and FPV workloads remain unchanged.
 The Web UI reports the authenticated caller's scopes at
 `/api/peripheral/input-grants`; revoke a scope by removing its principal/network
 pair and rerunning the playbook.
-Apply `playbooks/shared_world.yml` after the AARNN ingress rollout succeeds.
+Apply `playbooks/shared_world.yml` after the AARNN ingress rollout succeeds:
+
+```sh
+cd /home/pbisaacs/Developer/neuralmimicry/simulation_environment/ansible
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini \
+  playbooks/shared_world.yml
+```
+
+That play targets `sm00` and `sm01`, installs the pinned OpenCV 4.6 video-I/O
+runtime plus `libgpgme.so.11`, and keeps the shared Webots world on the
+configured primary host after viewers disconnect. Both libraries were verified
+installed on the two x86 hosts during the 2026-10-01 check.
 
 The authenticated browser broker, world catalogue, robot bindings, controllers,
 and Ansible runtime installation all live in this repository. The website's
