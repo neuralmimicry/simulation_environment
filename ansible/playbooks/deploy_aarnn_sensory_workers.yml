@@ -177,7 +177,7 @@
   order: inventory
   become: true
   serial: 1
-  gather_facts: true
+  gather_facts: false
   vars_files:
     - ../roles/webots_shared_world/defaults/main.yml
     - ../vars/neuralmimicry-site.yml
@@ -189,6 +189,10 @@
     simulation_environment_aarnn_node_port: 50051
     simulation_environment_aarnn_node_id: "native-{{ inventory_hostname }}"
   pre_tasks:
+    - name: Gather worker facts for package and architecture selection
+      ansible.builtin.setup:
+      tags: [worker_install]
+
     - name: Verify the worker play uses the live safe rollout order
       ansible.builtin.assert:
         that:
