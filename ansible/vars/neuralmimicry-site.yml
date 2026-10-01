@@ -83,10 +83,9 @@ simulation_environment_webots_aarnn_startup_io_contract_network_ids:
 simulation_environment_aarnn_orchestrator_addr: "http://192.168.1.61:50051"
 simulation_environment_aarnn_node_io_config_path: /etc/aarnn/shared-snn-network.json
 simulation_environment_aarnn_node_service_dropin: /etc/systemd/system/aarnn-node.service.d/20-shared-snn-io.conf
-# Pin the control plane to the tested AARNN ingress build. Keep the engine
-# image on its existing pin; native worker services were rolled separately.
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:cae5379e5492ad3780fc03543a4e5c6b33860994-orchestrator-arm64-64k-hwe"
-# The all-feature orchestrator image contains the same worker RPC server; the
-# engine DaemonSet supplies its own `--node` command and args.
-simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:6e0d7a3cf526d74d1bc4fb20508852c8d66f2066-node-arm64-64k-hwe"
+# Pin the orchestrator and engine node to the same tested build so their
+# acknowledged, idempotent network-load handoff stays compatible.
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:1afb7863abd608c5cb74ac852c13a5611b4d0d8a-orchestrator-arm64-64k-hwe"
+# The engine DaemonSet supplies the node command and args to this image.
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:1afb7863abd608c5cb74ac852c13a5611b4d0d8a-node-arm64-64k-hwe"
 simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:371b43e236734fc065c6fee298745bcaddc1d8fb-web-ui-arm64-64k-hwe"
