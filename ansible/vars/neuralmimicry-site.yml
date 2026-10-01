@@ -73,8 +73,10 @@ simulation_environment_webots_simulation_ingress_principals:
 simulation_environment_webots_aarnn_namespace: aarnn
 simulation_environment_webots_aarnn_bearer_secret: nm-webots-sensory-ingress
 simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn_orchestrator_bearer
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-orchestrator-arm64-64k-hwe"
+# Spirit runs the orchestrator and Web UI with 4 KiB AArch64 pages. The engine
+# DaemonSet targets the 64 KiB AArch64 qc02-qc04 workers.
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-orchestrator-arm64-4k"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.
 simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-node-arm64-64k-hwe"
-simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-web-ui-arm64-64k-hwe"
+simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-web-ui-arm64-4k"
