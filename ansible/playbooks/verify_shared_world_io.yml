@@ -41,6 +41,17 @@
     - name: Verify world clock and per-robot I/O from the primary Webots journal
       when: inventory_hostname == simulation_environment_webots_primary_host
       block:
+        - name: Read the current shared-world service start time
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - show
+              - --property=ActiveEnterTimestamp
+              - --value
+              - "{{ simulation_environment_webots_runtime_service }}"
+          register: simulation_environment_webots_verify_service_started
+          changed_when: false
+
         - name: Require every configured robot to connect with its expected AARNN dimensions
           ansible.builtin.command:
             argv:
@@ -48,7 +59,7 @@
               - --unit
               - "{{ simulation_environment_webots_runtime_service }}"
               - --since
-              - "{{ simulation_environment_webots_verify_log_window_minutes }} minutes ago"
+              - "{{ simulation_environment_webots_verify_service_started.stdout }}"
               - --no-pager
               - --output=cat
               - --grep
