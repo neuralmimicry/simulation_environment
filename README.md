@@ -43,8 +43,8 @@ compute host. Sign in at
 `wss://webots.neuralmimicry.ai/stream` viewer stream.
 
 Robot slots default to unbound so the world can be inspected before selecting
-networks. The current NeuralMimicry site profile defines two generic 32/16
-bindings: `neuralmimicry-shared-snn` and `tenant-aarnn`. Earlier Celegans and
+networks. The current NeuralMimicry site profile defines one generic 32/16
+binding: `neuralmimicry-shared-snn`. Earlier Celegans and
 Hexapod bindings are not active merely because their robot profiles remain in
 the world. Add a binding only after verifying that its existing AARNN network
 is available and publishes the required sensory I/O bridge. The service token
@@ -54,7 +54,7 @@ control-node secret file containing the Webots service token. It needs general
 `aarnn:use` access and an active network-scoped peripheral-input grant in
 `simulation_environment_webots_peripheral_input_grants`, as a list of
 `{principal, brain_id}` objects; the site profile grants the `webots` service
-principal only the two network IDs listed above.
+principal only the shared SNN network ID listed above.
 Keep the credential independent of a browser login. When its protected file is
 rotated, each robot controller reloads it after an HTTP 401 and retries the
 current request without restarting the shared world.

@@ -25,7 +25,6 @@
     "AARNN_NETWORK_CELEGANS_02": "celegans",
     "AARNN_NETWORK_HEXAPOD_01": "hexapod",
     "AARNN_NETWORK_SHARED_SNN": "hexapod",
-    "AARNN_NETWORK_TENANT": "hexapod",
     "AARNN_SLOT_06": "drosophila_banc",
     "AARNN_SLOT_07": "zebrafish",
     "AARNN_SLOT_08": "celegans"

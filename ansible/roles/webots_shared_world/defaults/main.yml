@@ -27,7 +27,6 @@ simulation_environment_webots_network_bindings:
   AARNN_NETWORK_CELEGANS_02: {}
   AARNN_NETWORK_HEXAPOD_01: {}
   AARNN_NETWORK_SHARED_SNN: {}
-  AARNN_NETWORK_TENANT: {}
   AARNN_SLOT_06: {}
   AARNN_SLOT_07: {}
   AARNN_SLOT_08: {}

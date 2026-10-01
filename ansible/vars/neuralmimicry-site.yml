@@ -34,9 +34,9 @@ continuum_tenant_webots_replicas: 2
 continuum_tenant_webots_hpa_min_replicas: 2
 continuum_tenant_webots_hpa_max_replicas: 8
 
-# These are logical AARNN networks, not worker hosts. The two networks that
-# currently exist are each represented by one embodied agent in the persistent
-# shared world; AARNN resolves their live distributed placement across qc/sm.
+# These are logical AARNN networks, not worker hosts. The operational shared
+# SNN is represented by one embodied agent in the persistent shared world;
+# AARNN resolves its live distributed placement across qc/sm.
 simulation_environment_webots_network_bindings:
   AARNN_NETWORK_SHARED_SNN:
     network_id: neuralmimicry-shared-snn
@@ -44,13 +44,6 @@ simulation_environment_webots_network_bindings:
     # The AARNN shared SNN uses the generic 32/16 profile. Reuse the existing
     # Hexapod body, excluding its 1x1 event camera (two channels) from inputs
     # and using the first 16 of its 18 motors.
-    sensor_regex: '^hex_s_(0[0-9]|1[0-9]|2[0-5]|27|28)_.*$'
-    actuator_regex: '^hex_o_(00[0-9]|01[0-5])_.*$'
-    expected_sensory: 32
-    expected_outputs: 16
-  AARNN_NETWORK_TENANT:
-    network_id: tenant-aarnn
-    robot_profile: hexapod
     sensor_regex: '^hex_s_(0[0-9]|1[0-9]|2[0-5]|27|28)_.*$'
     actuator_regex: '^hex_o_(00[0-9]|01[0-5])_.*$'
     expected_sensory: 32
@@ -67,8 +60,6 @@ simulation_environment_webots_activity_addr: ""
 simulation_environment_webots_peripheral_input_grants:
   - principal: webots
     brain_id: neuralmimicry-shared-snn
-  - principal: webots
-    brain_id: tenant-aarnn
 simulation_environment_webots_simulation_ingress_principals:
   - webots
 
@@ -81,9 +72,8 @@ simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn
 simulation_environment_webots_aarnn_startup_io_contract_path: /etc/aarnn/startup/default-network.json
 simulation_environment_webots_aarnn_startup_io_contract_network_ids:
   - neuralmimicry-shared-snn
-  - tenant-aarnn
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:a9314a4f0775d893b323ed6b17b54d018e380f52-orchestrator-arm64-64k-hwe"
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:7bd816b1c89545a20120dbf21018c11c4db6f858-orchestrator-arm64-64k-hwe"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.
-simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:a9314a4f0775d893b323ed6b17b54d018e380f52-node-arm64-64k-hwe"
-simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:a9314a4f0775d893b323ed6b17b54d018e380f52-web-ui-arm64-64k-hwe"
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:7bd816b1c89545a20120dbf21018c11c4db6f858-node-arm64-64k-hwe"
+simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:7bd816b1c89545a20120dbf21018c11c4db6f858-web-ui-arm64-64k-hwe"
