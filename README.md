@@ -88,7 +88,9 @@ sample. Each controller process uses a distinct `session_id`; its sensory
 frame sequence and timestamp derive from the common Webots world clock,
 restored from the persisted ecology clock after a simulator restart. This is
 one wall-clock-paced world time domain shared by every robot and NPC, not a
-per-network counter.
+per-network counter. A transient AARNN outage can expire an individual
+unadmitted frame, but the controller keeps its session alive and resumes with
+the newest frame from the shared world clock when the network route recovers.
 `--mode=realtime` targets wall-clock pacing, but CPU saturation can make the
 world lag; the supervisor logs the measured simulation-to-wall-clock rate with
 each state save. Sensor timestamps remain tied to the shared world state at the

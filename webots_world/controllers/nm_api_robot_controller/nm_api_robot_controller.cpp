@@ -407,6 +407,20 @@ class InferenceWorker {
               << std::endl;
   }
 
+  void expire_input_frame(const Frame &frame,
+                          std::chrono::steady_clock::duration elapsed) const {
+    // The old frame cannot be safely retried forever, but a transient
+    // orchestrator/bridge outage must not permanently disable this robot.
+    // submit() keeps only the newest world frame, so the worker can resume
+    // from the shared world clock as soon as the route becomes available.
+    std::cerr << "[nm_api_robot] sensory frame expired robot=" << robot_name_
+              << " network=" << network_id_ << " session=" << session_id_
+              << " step=" << frame.step << " reason=same-frame retry window expired"
+              << " elapsed_ms="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << " action=resume with latest world frame" << std::endl;
+  }
+
   void log_coalesced_frames(const nm_webots::CoalescedFrameSnapshot &snapshot) const {
     if (snapshot.count == 0)
       return;
@@ -466,7 +480,7 @@ class InferenceWorker {
         const auto elapsed = before_request - retry_started;
         const auto remaining = nm_webots::kSameFrameRetryWindow - elapsed;
         if (remaining <= std::chrono::steady_clock::duration::zero()) {
-          stop_input_session("same-frame retry window expired", frame, elapsed);
+          expire_input_frame(frame, elapsed);
           frame_finished = true;
           break;
         }
@@ -523,7 +537,7 @@ class InferenceWorker {
           const auto retry_elapsed = retry_now - retry_started;
           const auto retry_remaining = nm_webots::kSameFrameRetryWindow - retry_elapsed;
           if (retry_remaining <= std::chrono::steady_clock::duration::zero()) {
-            stop_input_session("same-frame retry window expired", frame, retry_elapsed);
+            expire_input_frame(frame, retry_elapsed);
             frame_finished = true;
             break;
           }

@@ -4,6 +4,7 @@
   become: true
   gather_facts: false
   vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
     - ../vars/neuralmimicry-site.yml
   vars:
     simulation_environment_webots_verify_bindings: >-
@@ -50,6 +51,11 @@
               - "{{ simulation_environment_webots_verify_log_window_minutes }} minutes ago"
               - --no-pager
               - --output=cat
+              - --grep
+              - >-
+                connected robot={{ item.key }} network={{ item.value.network_id }}
+                sensors={{ item.value.expected_sensory }}
+                actuators={{ item.value.expected_outputs }}
           register: simulation_environment_webots_verify_connection
           changed_when: false
           until: >-
@@ -74,6 +80,11 @@
               - "{{ simulation_environment_webots_verify_log_window_minutes }} minutes ago"
               - --no-pager
               - --output=cat
+              - --grep
+              - >-
+                sensory frame admitted robot={{ item.key }} network={{ item.value.network_id }}
+                .*input_spikes=[1-9][0-9]* .*activity_snapshot=available
+                .*output_spikes=[1-9][0-9]* .*mapped_actuators=[1-9][0-9]*
           register: simulation_environment_webots_verify_sensory
           changed_when: false
           until: >-
@@ -98,6 +109,10 @@
               - "{{ simulation_environment_webots_verify_log_window_minutes }} minutes ago"
               - --no-pager
               - --output=cat
+              - --grep
+              - >-
+                motor outputs applied robot={{ item.key }} network={{ item.value.network_id }}
+                active_motors=[1-9][0-9]*
           register: simulation_environment_webots_verify_motor
           changed_when: false
           until: >-
