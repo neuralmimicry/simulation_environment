@@ -23,6 +23,11 @@
                     value: "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
                   - name: NM_ORCHESTRATOR_STARTUP_IO_CONTRACT_NETWORK_IDS
                     value: "{{ simulation_environment_webots_aarnn_startup_io_contract_network_ids | join(',') }}"
+                resources:
+                  requests:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_request }}"
+                  limits:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_limit }}"
     simulation_environment_webots_aarnn_web_ui_patch:
       spec:
         template:
@@ -173,6 +178,18 @@
               | length
             ) == 0
         fail_msg: "Startup I/O contracts may target only the networks represented in the shared Webots world."
+      tags: [webots_ingress_config]
+
+    - name: Require the Webots orchestrator memory request below its bounded limit
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_aarnn_orchestrator_memory_request is match('^[1-9][0-9]*Gi$')
+          - simulation_environment_webots_aarnn_orchestrator_memory_limit is match('^[1-9][0-9]*Gi$')
+          - >-
+            (simulation_environment_webots_aarnn_orchestrator_memory_request | regex_replace('Gi$', '') | int)
+            < (simulation_environment_webots_aarnn_orchestrator_memory_limit | regex_replace('Gi$', '') | int)
+        fail_msg: >-
+          The Webots-backed AARNN orchestrator must request less memory than its configured limit.
       tags: [webots_ingress_config]
 
     - name: Verify the orchestrator I/O contract is readable before patching
