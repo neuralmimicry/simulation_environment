@@ -1,7 +1,8 @@
 ---
 - name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
-  # qc01 hosts the Kubernetes engine DaemonSet; roll native AARNN workers only.
-  hosts: "qc00:qc02:qc03:qc04:qc05:sm00:sm01"
+  # qc00 is offline and qc05 has no active native worker service. qc01's engine
+  # DaemonSet is updated with the ingress images instead of this native play.
+  hosts: "qc02:qc03:qc04:sm00:sm01"
   become: true
   serial: 1
   gather_facts: true
