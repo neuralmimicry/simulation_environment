@@ -142,26 +142,36 @@
           - simulation_environment_shared_snn_ingress_worker_hosts | difference(simulation_environment_shared_snn_active_worker_hosts) | length == 0
           - simulation_environment_shared_snn_active_worker_hosts | difference(groups['aarnn_sensory_workers']) | length == 0
           - simulation_environment_aarnn_worker_rollout_order | length == groups['aarnn_sensory_workers'] | length
-          - simulation_environment_aarnn_worker_rollout_order == groups['aarnn_sensory_workers']
+          - simulation_environment_aarnn_worker_rollout_order | unique | length == groups['aarnn_sensory_workers'] | length
+          - groups['aarnn_sensory_workers'] | difference(simulation_environment_aarnn_worker_rollout_order) | length == 0
         fail_msg: >-
-          The live shared-SNN placement is not safely represented by the ordered worker inventory.
+          The live shared-SNN placement cannot be converted into a safe ordered worker rollout.
           Active workers={{ simulation_environment_shared_snn_active_worker_hosts | default([]) }};
           active external nodes={{ simulation_environment_shared_snn_external_node_ids | default([]) }};
           sensory ingress owners={{ simulation_environment_shared_snn_ingress_worker_hosts | default([]) }};
           external sensory ingress owners={{ simulation_environment_shared_snn_external_ingress_node_ids | default([]) }};
           required rollout={{ simulation_environment_aarnn_worker_rollout_order | default([]) }}.
-          Update the inventory order so inactive workers run first, active non-ingress workers next,
-          and the current managed layer-0 sensory ingress owner last. External source nodes are
-          reported for visibility and remain untouched by this native-worker rollout.
+          The rollout can proceed only when every active worker is in the managed inventory and
+          exactly one managed or external sensory ingress owner is known. External source nodes
+          are reported for visibility and remain untouched by this native-worker rollout.
+      run_once: true
+      tags: [rollout_order_preflight]
+
+    - name: Add workers to a temporary group in the live safe rollout order
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: aarnn_sensory_workers_rollout
+      loop: "{{ simulation_environment_aarnn_worker_rollout_order }}"
+      changed_when: false
       run_once: true
       tags: [rollout_order_preflight]
 
 - name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
   # qc00 is offline and qc05 has no active native worker service. qc01's engine
   # DaemonSet is updated with the ingress images instead of this native play.
-  # The placement preflight requires this inventory order to put the live
-  # layer-0 sensory ingress owner last.
-  hosts: aarnn_sensory_workers
+  # The preceding play builds this group from live placement, putting the
+  # current managed layer-0 ingress owner last immediately before the rollout.
+  hosts: aarnn_sensory_workers_rollout
   order: inventory
   become: true
   serial: 1
