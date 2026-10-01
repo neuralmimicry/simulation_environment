@@ -1,6 +1,6 @@
 ---
 - name: Deploy the scoped AARNN Webots sensory ingress
-  hosts: aarnn_control
+  hosts: rk1
   become: true
   vars_files:
     - ../vars/neuralmimicry-site.yml
