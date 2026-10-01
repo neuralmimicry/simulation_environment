@@ -786,7 +786,7 @@ def _load_catalog(settings: Settings) -> Dict[str, Dict[str, Any]]:
 def _verify_access_token(access_token: str, cookie_header: str = "") -> Dict[str, Any]:
     base = _settings().central_auth_api_base
     if not base:
-        return {"authenticated": False}
+        raise requests.RequestException("central auth API is not configured")
     headers = {"Accept": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
@@ -801,13 +801,19 @@ def _verify_access_token(access_token: str, cookie_header: str = "") -> Dict[str
         headers=headers,
         timeout=_settings().central_auth_timeout_secs,
     )
+    if response.status_code in (408, 425, 429) or response.status_code >= 500:
+        raise requests.HTTPError(
+            f"central auth returned HTTP {response.status_code}", response=response
+        )
     if response.status_code >= 400:
         return {"authenticated": False}
     try:
         data = response.json()
-    except ValueError:
-        return {"authenticated": False}
-    return data if isinstance(data, dict) else {"authenticated": False}
+    except ValueError as error:
+        raise requests.RequestException("central auth returned invalid JSON") from error
+    if not isinstance(data, dict):
+        raise requests.RequestException("central auth returned an invalid session payload")
+    return data
 
 
 def create_app(settings: Optional[Settings] = None) -> Flask:
