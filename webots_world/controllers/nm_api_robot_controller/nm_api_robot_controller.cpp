@@ -649,6 +649,7 @@ int main() {
   std::vector<float> all_sensors(static_cast<std::size_t>(mapper.get_sensory_size()));
   std::vector<float> all_actuators(static_cast<std::size_t>(mapper.get_output_size()), 0.5f);
   std::vector<std::chrono::steady_clock::time_point> output_until(actuator_indices.size());
+  auto next_motor_status_log = std::chrono::steady_clock::time_point::min();
 
   while (robot.step(timestep) != -1) {
     if (worker) {
@@ -681,10 +682,19 @@ int main() {
           if (index < output_until.size())
             output_until[index] = now + output_hold;
       std::fill(all_actuators.begin(), all_actuators.end(), 0.5f);
+      std::size_t active_motors = 0;
       for (std::size_t i = 0; i < actuator_indices.size(); ++i)
-        if (output_until[i] > now)
+        if (output_until[i] > now) {
           all_actuators[static_cast<std::size_t>(actuator_indices[i])] = 0.75f;
+          ++active_motors;
+        }
       mapper.apply_actuators(all_actuators);
+      if (active_motors > 0 && now >= next_motor_status_log) {
+        std::cout << "[nm_api_robot] motor outputs applied robot=" << robot_name
+                  << " network=" << binding.network_id
+                  << " active_motors=" << active_motors << std::endl;
+        next_motor_status_log = now + std::chrono::seconds(30);
+      }
     }
   }
 

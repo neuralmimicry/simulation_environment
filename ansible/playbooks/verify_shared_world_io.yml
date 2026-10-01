@@ -1,0 +1,149 @@
+---
+- name: Verify the persistent shared Webots world and AARNN I/O paths
+  hosts: webots_fleet
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars/neuralmimicry-site.yml
+  vars:
+    simulation_environment_webots_verify_bindings: >-
+      {{ simulation_environment_webots_network_bindings
+         | dict2items
+         | selectattr('value.network_id', 'defined')
+         | list }}
+    simulation_environment_webots_verify_log_window_minutes: 15
+  tasks:
+    - name: Read the shared-world service state
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ simulation_environment_webots_runtime_service }}"
+      register: simulation_environment_webots_verify_service
+      changed_when: false
+      failed_when: false
+
+    - name: Require exactly one live Webots world on the primary host
+      ansible.builtin.assert:
+        that:
+          - >-
+            (inventory_hostname == simulation_environment_webots_primary_host
+             and simulation_environment_webots_verify_service.stdout == 'active')
+            or
+            (inventory_hostname != simulation_environment_webots_primary_host
+             and simulation_environment_webots_verify_service.stdout == 'inactive')
+        fail_msg: >-
+          Expected {{ simulation_environment_webots_runtime_service }} to run only on
+          {{ simulation_environment_webots_primary_host }}; {{ inventory_hostname }} reports
+          {{ simulation_environment_webots_verify_service.stdout | default('no state') }}.
+
+    - name: Verify world clock and per-robot I/O from the primary Webots journal
+      when: inventory_hostname == simulation_environment_webots_primary_host
+      block:
+        - name: Require every configured robot to connect with its expected AARNN dimensions
+          ansible.builtin.command:
+            argv:
+              - journalctl
+              - --unit
+              - "{{ simulation_environment_webots_runtime_service }}"
+              - --since
+              - "{{ simulation_environment_webots_verify_log_window_minutes }} minutes ago"
+              - --no-pager
+              - --output=cat
+          register: simulation_environment_webots_verify_connection
+          changed_when: false
+          until: >-
+            simulation_environment_webots_verify_connection.stdout is search(
+              'connected robot=' ~ item.key ~
+              ' network=' ~ item.value.network_id ~
+              ' sensors=' ~ (item.value.expected_sensory | string) ~
+              ' actuators=' ~ (item.value.expected_outputs | string))
+          retries: 90
+          delay: 2
+          loop: "{{ simulation_environment_webots_verify_bindings }}"
+          loop_control:
+            label: "{{ item.key }} -> {{ item.value.network_id }}"
+
+        - name: Require nonzero AER sensory admission and nonzero neural activity projection
+          ansible.builtin.command:
+            argv:
+              - journalctl
+              - --unit
+              - "{{ simulation_environment_webots_runtime_service }}"
+              - --since
+              - "{{ simulation_environment_webots_verify_log_window_minutes }} minutes ago"
+              - --no-pager
+              - --output=cat
+          register: simulation_environment_webots_verify_sensory
+          changed_when: false
+          until: >-
+            simulation_environment_webots_verify_sensory.stdout is search(
+              'sensory frame admitted robot=' ~ item.key ~
+              ' network=' ~ item.value.network_id ~
+              '.*input_spikes=[1-9][0-9]* .*activity_snapshot=available'
+              ~ ' output_spikes=[1-9][0-9]* mapped_actuators=[1-9][0-9]*')
+          retries: 90
+          delay: 2
+          loop: "{{ simulation_environment_webots_verify_bindings }}"
+          loop_control:
+            label: "{{ item.key }} -> {{ item.value.network_id }}"
+
+        - name: Require returned neural outputs to be applied to each robot's Webots motors
+          ansible.builtin.command:
+            argv:
+              - journalctl
+              - --unit
+              - "{{ simulation_environment_webots_runtime_service }}"
+              - --since
+              - "{{ simulation_environment_webots_verify_log_window_minutes }} minutes ago"
+              - --no-pager
+              - --output=cat
+          register: simulation_environment_webots_verify_motor
+          changed_when: false
+          until: >-
+            simulation_environment_webots_verify_motor.stdout is search(
+              'motor outputs applied robot=' ~ item.key ~
+              ' network=' ~ item.value.network_id ~
+              ' active_motors=[1-9][0-9]*')
+          retries: 90
+          delay: 2
+          loop: "{{ simulation_environment_webots_verify_bindings }}"
+          loop_control:
+            label: "{{ item.key }} -> {{ item.value.network_id }}"
+
+        - name: Read the persisted shared world clock before waiting
+          ansible.builtin.stat:
+            path: "{{ simulation_environment_webots_state_world }}.clock"
+          register: simulation_environment_webots_verify_clock_file
+          until: simulation_environment_webots_verify_clock_file.stat.exists
+          retries: 30
+          delay: 2
+
+        - name: Read the shared world clock value before waiting
+          ansible.builtin.command:
+            argv:
+              - cat
+              - "{{ simulation_environment_webots_state_world }}.clock"
+          register: simulation_environment_webots_verify_clock_before
+          changed_when: false
+
+        - name: Allow the realtime shared world to advance
+          ansible.builtin.pause:
+            seconds: 35
+          become: false
+
+        - name: Read the persisted shared world clock after waiting
+          ansible.builtin.command:
+            argv:
+              - cat
+              - "{{ simulation_environment_webots_state_world }}.clock"
+          register: simulation_environment_webots_verify_clock_after
+          changed_when: false
+
+        - name: Require the common world clock to advance while unattended
+          ansible.builtin.assert:
+            that:
+              - simulation_environment_webots_verify_clock_after.stdout | float > simulation_environment_webots_verify_clock_before.stdout | float
+            fail_msg: >-
+              The persisted shared ecology clock did not advance while the primary Webots
+              service remained active.

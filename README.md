@@ -96,9 +96,11 @@ time of sampling. AARNN inference runs asynchronously per network, so different
 calculation and communication latencies change when each action arrives
 without changing or pausing the shared world clock. Do not retimestamp an older
 sensor sample to its later host arrival time.
-Treat sensory admission as separate from motor activity: verify a successful
-controller report with non-zero `output_spikes` and `mapped_actuators` before
-claiming a robot has acted.
+Treat sensory admission as separate from motor activity. The acceptance check
+requires a bound robot's non-zero `input_spikes` frame to be admitted to its
+configured network, then separately requires non-zero `output_spikes`, mapped
+actuators, and a controller report that those outputs were applied to Webots
+motors before claiming that robot has acted.
 The role checks that bound deployments have a token and installs it with
 owner-only permissions on both fleet hosts. Keep token values out of version
 control.
@@ -185,6 +187,20 @@ That play targets `sm00` and `sm01`, installs the pinned OpenCV 4.6 video-I/O
 runtime plus `libgpgme.so.11`, and keeps the shared Webots world on the
 configured primary host after viewers disconnect. Both libraries were verified
 installed on the two x86 hosts during the 2026-10-01 check.
+
+After all three rollouts, verify every configured robot/network I/O path and
+the unattended world clock:
+
+```sh
+cd /home/pbisaacs/Developer/neuralmimicry/simulation_environment/ansible
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/hosts.ini \
+  playbooks/verify_shared_world_io.yml
+```
+
+The check reports sensory admission and motor actuation independently for each
+bound pair, checks the configured sensor/actuator dimensions, requires one
+active world on `sm00` with `sm01` stopped, and confirms the persisted common
+clock continues advancing.
 
 The authenticated browser broker, world catalogue, robot bindings, controllers,
 and Ansible runtime installation all live in this repository. The website's

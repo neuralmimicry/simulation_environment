@@ -203,6 +203,7 @@
             recursive: yes
             rsync_opts:
               - "--exclude=.git"
+              - "--exclude=**/.secrets/***"
               - "--exclude=.venv"
               - "--exclude=target"
               - "--exclude=webots_world/controllers/*/build"
@@ -374,6 +375,7 @@
             recursive: yes
             rsync_opts:
               - "--exclude=.git"
+              - "--exclude=**/.secrets/***"
               - "--exclude=target"
               - "--exclude=dist"
               - "--exclude=__pycache__"

@@ -82,8 +82,8 @@ simulation_environment_webots_aarnn_startup_io_contract_path: /etc/aarnn/startup
 simulation_environment_webots_aarnn_startup_io_contract_network_ids:
   - neuralmimicry-shared-snn
   - tenant-aarnn
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-orchestrator-arm64-64k-hwe"
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:a9314a4f0775d893b323ed6b17b54d018e380f52-orchestrator-arm64-64k-hwe"
 # The all-feature orchestrator image contains the same worker RPC server; the
 # engine DaemonSet supplies its own `--node` command and args.
-simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-node-arm64-64k-hwe"
-simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:373a6c793a0417c9a757ea2ab8ace33286f93d5d-web-ui-arm64-64k-hwe"
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:a9314a4f0775d893b323ed6b17b54d018e380f52-node-arm64-64k-hwe"
+simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:a9314a4f0775d893b323ed6b17b54d018e380f52-web-ui-arm64-64k-hwe"
