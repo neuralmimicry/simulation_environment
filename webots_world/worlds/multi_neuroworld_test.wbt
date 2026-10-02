@@ -6,11 +6,10 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "../protos/HexapodRobot.proto"
 
 WorldInfo {
-  # Slightly larger time step to keep Webots responsive with articulated
-  # multi-robot scenes and clustered controller traffic.
+  # Fly rigs need a finer collision step; other worlds retain 32 ms.
   basicTimeStep 32
-  # Gravity reduced for zebrafish-only aquarium worlds (buoyancy approximation).
-  gravity 9.8
+  # Named Fluid supplies fish buoyancy under physical gravity.
+  gravity 9.81
   contactProperties [
     ContactProperties {
       material1 "default"
@@ -25,8 +24,8 @@ WorldInfo {
 }
 Viewpoint {
   fieldOfView 0.88
-  # Zero-roll camera solved from eye->scene-center with world +Z as "up".
-  orientation 0.311215 0.311215 -0.897937 1.678244
+  # Zero-roll Viewpoint rotation: local -Z faces the scene, local +Y stays up.
+  orientation 0.000000 0.436555 0.899678 3.141593
   position 0.00 5.38 4.60
 }
 TexturedBackground {
@@ -45,12 +44,8 @@ DirectionalLight {
   castShadows TRUE
 }
 
-# Shared habitat terrain; content 4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8
+# Shared habitat terrain; content d96cc40ddbc0c0139cad38bd3e39b462eaef4fc4f0337da52259b4ed66e0f0c4
 Solid { name "nm_terrain_substrate" translation 0.000000 0.000000 -0.050000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.27 0.25 0.2 roughness 0.65 metalness 0  } geometry Box { size 4.000000 4.000000 0.100000 } } ] } ] boundingObject Box { size 4.000000 4.000000 0.100000 } }
-Solid { name "nm_terrain_rim_0" translation 0.000000 2.000000 0.180000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 4.000000 0.050000 0.360000 } } ] } ] boundingObject Box { size 4.000000 0.050000 0.360000 } }
-Solid { name "nm_terrain_rim_1" translation 0.000000 -2.000000 0.070000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 4.000000 0.050000 0.140000 } } ] } ] boundingObject Box { size 4.000000 0.050000 0.140000 } }
-Solid { name "nm_terrain_rim_2" translation 2.000000 0.000000 0.180000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 0.050000 4.000000 0.360000 } } ] } ] boundingObject Box { size 0.050000 4.000000 0.360000 } }
-Solid { name "nm_terrain_rim_3" translation -2.000000 0.000000 0.180000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 0.050000 4.000000 0.360000 } } ] } ] boundingObject Box { size 0.050000 4.000000 0.360000 } }
 Solid { name "nm_terrain_grain_00" translation -1.840000 -1.840000 0.006000 rotation 0 0 1 0.000000 children [ Transform { scale 0.030000 0.022000 0.012000 children [ Shape { appearance PBRAppearance { baseColor 0.2376 0.22 0.17600000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
 Solid { name "nm_terrain_grain_01" translation -0.491881 0.339417 0.006000 rotation 0 0 1 0.000000 children [ Transform { scale 0.030000 0.022000 0.012000 children [ Shape { appearance PBRAppearance { baseColor 0.24840000000000004 0.23 0.18400000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
 Solid { name "nm_terrain_grain_02" translation 0.856238 -1.161165 0.006000 rotation 0 0 1 0.000000 children [ Transform { scale 0.030000 0.022000 0.012000 children [ Shape { appearance PBRAppearance { baseColor 0.2592 0.24 0.192 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
@@ -157,6 +152,219 @@ Solid { name "nm_terrain_optic_flow_panel_14" translation 1.560000 1.958000 0.19
 Solid { name "nm_terrain_optic_flow_panel_15" translation 1.800000 1.958000 0.198000 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.120000 0.024000 0.234000 } } ] } ]  }
 Solid { name "nm_terrain_light_beacon" translation 1.460000 1.460000 0.520000 rotation 0 0 1 0.000000 children [ Transform { scale 0.150000 0.150000 0.150000 children [ Shape { appearance PBRAppearance { baseColor 0.99 0.86 0.52 roughness 0.65 metalness 0 emissiveColor 0.99 0.86 0.52 } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
 PointLight { location 1.46000 1.46000 0.52000 color 1 0.86 0.52 intensity 0.8 radius 6.0000 attenuation 0 0 1 }
+Transform {
+  translation 0.0000 0.0000 0.0040
+  rotation 0.000000 0.000000 1.000000 0.00000
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.37 0.40 0.36
+        roughness 0.84
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 2.3000 1.6400 0.0060
+      }
+    }
+  ]
+}
+Transform {
+  translation 1.1000 0.0000 0.0060
+  rotation 0.000000 0.000000 1.000000 0.00000
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.52
+        metalness 0.00
+        transparency 0.12
+      }
+      geometry Box {
+        size 0.2200 1.0600 0.0040
+      }
+    }
+  ]
+}
+Solid {
+  translation 0.5800 -0.4200 0.1400
+  name "eco_hexapod_01_push_ball"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.43 0.22
+        roughness 0.28
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.1400
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.1400
+  }
+  physics Physics {
+    density -1
+    mass 0.24000
+  }
+}
+Solid {
+  translation 0.5400 0.4000 0.1300
+  name "eco_hexapod_01_push_cube"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.32 0.62 0.78
+        roughness 0.40
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.2600 0.2600 0.2600
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.2600 0.2600 0.2600
+  }
+  physics Physics {
+    density -1
+    mass 0.38000
+  }
+}
+Solid {
+  translation 0.9600 0.0500 0.1100
+  rotation 0.000000 1.000000 0.000000 0.18000
+  name "eco_hexapod_01_balance_ramp"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.67 0.56 0.34
+        roughness 0.58
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.8200 0.6200 0.1400
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.8200 0.6200 0.1400
+  }
+}
+Solid {
+  translation 1.5500 -0.5800 0.4300
+  name "eco_hexapod_01_gate_left_post"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
+  }
+}
+Solid {
+  translation 1.3800 -0.7192 0.5800
+  rotation 0.000000 0.000000 1.000000 0.00000
+  name "eco_hexapod_01_gate_left_panel"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.76 0.34
+        roughness 0.36
+        metalness 0.00
+        transparency 0.00
+        emissiveColor 0.11 0.09 0.04
+      }
+      geometry Box {
+        size 0.0320 0.4000 0.7000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
+  }
+}
+Solid {
+  translation 1.5500 0.5800 0.4300
+  name "eco_hexapod_01_gate_right_post"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.56 0.47 0.32
+        roughness 0.64
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Cylinder {
+        radius 0.0600
+        height 0.8600
+      }
+    }
+  ]
+  boundingObject Cylinder {
+    radius 0.0600
+    height 0.8600
+  }
+}
+Solid {
+  translation 1.3800 0.7192 0.5800
+  rotation 0.000000 0.000000 1.000000 0.00000
+  name "eco_hexapod_01_gate_right_panel"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.30 0.78 0.84
+        roughness 0.36
+        metalness 0.00
+        transparency 0.00
+        emissiveColor 0.04 0.09 0.10
+      }
+      geometry Box {
+        size 0.0320 0.4000 0.7000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.0320 0.4000 0.7000
+  }
+}
+Solid {
+  translation 1.5500 0.0000 0.8300
+  rotation 0.000000 0.000000 1.000000 1.57080
+  name "eco_hexapod_01_gate_crossbar"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.76 0.69 0.48
+        roughness 0.52
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 1.2600 0.0800 0.0800
+      }
+    }
+  ]
+  boundingObject Box {
+    size 1.2600 0.0800 0.0800
+  }
+}
+
 
 Robot {
   name "NM_WORLD_RECORDER"

@@ -9,6 +9,10 @@ simulation_environment_webots_repo_path: "{{ simulation_environment_webots_sourc
 simulation_environment_webots_aarnn_header_path: "{{ simulation_environment_webots_source_root }}/aarnn_rust/include/device_mapper.hpp"
 simulation_environment_webots_local_repo: "{{ lookup('env', 'SIMULATION_ENVIRONMENT_SRC') | default(playbook_dir ~ '/../../', true) | realpath }}"
 simulation_environment_webots_local_aarnn_header: "{{ lookup('env', 'AARNN_RUST_SRC') | default((simulation_environment_webots_local_repo | dirname) ~ '/aarnn_rust', true) | realpath }}/include/device_mapper.hpp"
+simulation_environment_webots_local_aarnn_include_root: "{{ simulation_environment_webots_local_aarnn_header | dirname }}"
+simulation_environment_webots_aarnn_response_headers:
+  - celegans_muscle_response.hpp
+  - simulated_motor_response.hpp
 simulation_environment_webots_home_dir: /usr/local/webots
 simulation_environment_webots_port: 1234
 simulation_environment_webots_state_dir: "{{ simulation_environment_webots_home }}/worlds"

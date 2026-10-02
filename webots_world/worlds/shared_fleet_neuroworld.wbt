@@ -13,11 +13,10 @@ EXTERNPROTO "../protos/NmHabitatStream.proto"
 EXTERNPROTO "../protos/NmHabitatTerrain.proto"
 
 WorldInfo {
-  # Slightly larger time step to keep Webots responsive with articulated
-  # multi-robot scenes and clustered controller traffic.
-  basicTimeStep 32
-  # Gravity reduced for zebrafish-only aquarium worlds (buoyancy approximation).
-  gravity 9.8
+  # A fly occupies the scene, so use the collision step needed by its small
+  # articulated body even when other fleet slots are temporarily unbound.
+  basicTimeStep 8
+  gravity 9.81
   contactProperties [
     ContactProperties {
       material1 "default"
@@ -198,6 +197,25 @@ NmHabitatTerrain { translation 0 4.8 0 scale 2.7 2.2 1 }
 NmHabitatOrchard { translation -5.1 0 0 scale 2.4 2.4 1 }
 NmHabitatRoom { translation 0 -4.8 0 scale 2.2 2.2 1 }
 NmHabitatStream { translation 5.1 0 0 scale 2.4 2.4 1 }
+# Match robot_capabilities.json water bounds. The habitat's translucent Solid
+# remains the visual surface; this world-level Fluid supplies physical
+# buoyancy and drag to ZebrafishRobot's named ImmersionProperties.
+Fluid {
+  name "nm_freshwater"
+  translation 5.1 0 0.25
+  density 1000
+  viscosity 0.001
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.1 0.43 0.61
+        transparency 1
+      }
+      geometry Box { size 4.56 4.56 0.38 }
+    }
+  ]
+  boundingObject Box { size 4.56 4.56 0.38 }
+}
 
 # A low gravel shore at the stream's open southern bank joins the pool to the
 # shared ground. The supervisor keeps swim-only agents in the water region.

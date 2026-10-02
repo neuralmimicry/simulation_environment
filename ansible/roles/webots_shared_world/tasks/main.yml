@@ -61,6 +61,21 @@
       - simulation_environment_webots_aarnn_header_stat.stat.exists | default(false)
     fail_msg: "The AARNN device mapper header was not found at {{ simulation_environment_webots_local_aarnn_header }}."
 
+- name: Check the reused AARNN simulated-muscle response headers
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_local_aarnn_include_root }}/{{ item }}"
+  loop: "{{ simulation_environment_webots_aarnn_response_headers }}"
+  register: simulation_environment_webots_response_header_stats
+
+- name: Require the AARNN simulated-muscle response headers
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists | default(false)
+    fail_msg: "The AARNN response header {{ item.item }} is required by the Webots API controller."
+  loop: "{{ simulation_environment_webots_response_header_stats.results }}"
+
 - name: Check the fleet hosts have the requested NVIDIA hardware
   ansible.builtin.command:
     argv:
@@ -329,6 +344,16 @@
     owner: root
     group: root
     mode: "0644"
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Install the reused AARNN simulated-muscle response headers
+  ansible.builtin.copy:
+    src: "{{ simulation_environment_webots_local_aarnn_include_root }}/{{ item }}"
+    dest: "{{ simulation_environment_webots_aarnn_header_path | dirname }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ simulation_environment_webots_aarnn_response_headers }}"
   notify: Reload systemd and restart the shared Webots world
 
 - name: Compile the AARNN robot controller and persistent ecology supervisor

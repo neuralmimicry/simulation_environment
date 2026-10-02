@@ -1,8 +1,14 @@
 #include "coalesced_frame_metrics.hpp"
 #include "inference_retry_policy.hpp"
+#include "neural_effectors.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <vector>
 
 int main() {
   using nm_webots::InjectionResult;
@@ -41,4 +47,51 @@ int main() {
   assert(second_batch.first_step == 109);
   assert(second_batch.last_step == 109);
   assert(second_batch.total == 3);
+
+  // The shared API bridge must turn admitted muscle-channel output into a
+  // physical spine command; neutral channels must not generate movement.
+  std::vector<std::string> worm_names;
+  for (int segment = 1; segment <= 8; ++segment) {
+    std::ostringstream suffix;
+    suffix << std::setw(2) << std::setfill('0') << segment;
+    worm_names.push_back("celegans_spine_" + suffix.str());
+    for (const char *group : {"MDL", "MDR", "MVL", "MVR"})
+      worm_names.push_back("celegans_o_001_" + std::string(group) + suffix.str());
+  }
+  nm_webots::CelegansSpineEffectors worm(32.0f);
+  worm.discover(worm_names);
+  assert(worm.active());
+  std::vector<float> worm_commands(worm_names.size(), 0.5f);
+  worm.apply(worm_commands);
+  assert(std::fabs(worm_commands[0] - 0.5f) < 0.0001f);
+  worm_commands[3] = 0.75f;  // MVL01
+  worm_commands[4] = 0.75f;  // MVR01
+  for (int step = 0; step < 6; ++step)
+    worm.apply(worm_commands);
+  assert(worm_commands[0] > 0.52f);
+
+  std::vector<std::string> fly_names;
+  for (int channel = 0; channel < 16; ++channel)
+    fly_names.push_back("dros_o_" + std::to_string(channel) + "_motor");
+  fly_names.push_back("wing_left_flap");
+  fly_names.push_back("wing_right_flap");
+  for (const char *side : {"left", "right"})
+    for (const char *position : {"front", "mid", "rear"})
+      for (const char *joint : {"coxa", "femur", "tibia", "tarsus"})
+        fly_names.push_back("leg_" + std::string(side) + "_" + position + "_" + joint);
+  nm_webots::FlyEffectors fly;
+  fly.discover(fly_names);
+  assert(fly.active());
+  std::vector<float> fly_commands(fly_names.size(), 0.5f);
+  assert(fly.apply(fly_commands, 8.0f) == 0.0f);
+  for (int channel = 0; channel < 8; ++channel)
+    fly_commands[channel] = 0.75f;
+  const float fly_activity = fly.apply(fly_commands, 8.0f);
+  assert(fly_activity > 0.0f && fly_activity <= 1.0f);
+  assert(std::fabs(fly_commands[16] - 0.5f) > 0.001f);
+  assert(std::any_of(fly_commands.begin() + 18, fly_commands.end(),
+                     [](float value) { return std::fabs(value - 0.5f) > 0.001f; }));
+  for (int channel = 0; channel < 8; ++channel)
+    fly_commands[channel] = 0.5f;
+  assert(fly.apply(fly_commands, 8.0f) == 0.0f);
 }

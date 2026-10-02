@@ -1,7 +1,8 @@
-#include <webots/Robot.hpp>
+#include <webots/Supervisor.hpp>
 #include <device_mapper.hpp>
 #include "coalesced_frame_metrics.hpp"
 #include "inference_retry_policy.hpp"
+#include "neural_effectors.hpp"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -27,7 +28,7 @@
 
 using nlohmann::json;
 using webots::DeviceMapper;
-using webots::Robot;
+using webots::Supervisor;
 
 namespace {
 struct Binding {
@@ -589,7 +590,7 @@ Binding load_binding(const json &config, const std::string &robot_name) {
 }  // namespace
 
 int main() {
-  Robot robot;
+  Supervisor robot;
   const int timestep = static_cast<int>(robot.getBasicTimeStep());
   const double world_elapsed_before_start = load_world_elapsed_seconds(
       env_or("NM_WEBOTS_RUNTIME_WORLD_FILE", ""));
@@ -620,6 +621,10 @@ int main() {
   std::vector<int> actuator_indices;
   const auto sensor_names = mapper.get_sensor_names();
   const auto actuator_names = mapper.get_actuator_names();
+  nm_webots::CelegansSpineEffectors celegans_effectors(static_cast<float>(timestep));
+  nm_webots::FlyEffectors fly_effectors;
+  celegans_effectors.discover(actuator_names);
+  fly_effectors.discover(actuator_names);
   try {
     binding = load_binding(config, robot_name);
     for (std::size_t i = 0; i < sensor_names.size(); ++i)
@@ -660,10 +665,15 @@ int main() {
   const auto output_hold = std::chrono::milliseconds(
       std::max(20, config.value("output_hold_ms", 1500)));
   auto next_inference = std::chrono::steady_clock::now();
+  std::uint64_t last_source_step = 0;
   std::vector<float> all_sensors(static_cast<std::size_t>(mapper.get_sensory_size()));
   std::vector<float> all_actuators(static_cast<std::size_t>(mapper.get_output_size()), 0.5f);
   std::vector<std::chrono::steady_clock::time_point> output_until(actuator_indices.size());
   auto next_motor_status_log = std::chrono::steady_clock::time_point::min();
+  webots::Node *fly_body = worker && fly_effectors.active() ? robot.getSelf() : nullptr;
+  double fly_lift_force = 0.0;
+  double previous_fly_altitude = 0.0;
+  bool fly_altitude_initialized = false;
 
   while (robot.step(timestep) != -1) {
     if (worker) {
@@ -672,12 +682,19 @@ int main() {
       if (now >= next_inference) {
         const double world_time_ms =
             (world_elapsed_before_start + robot.getTime()) * 1000.0;
-        const auto world_step = std::llround(world_time_ms / static_cast<double>(timestep));
+        // Preserve the shared world's established 32 ms source-sequence
+        // mapping when the physics step is refined to 8 ms for flight. Capture
+        // time stays at the actual Webots instant; two captures in one source
+        // quantum receive distinct sequence numbers in this session.
+        constexpr double kSourceSequenceQuantumMs = 32.0;
+        const auto world_step = std::llround(world_time_ms / kSourceSequenceQuantumMs);
         Frame frame;
         // Sparse AARNN ingress sequences frames by step_index. Derive it from
         // the shared, persisted world clock instead of advancing a private
         // controller counter, so every network sees the same world timeline.
-        frame.step = world_step > 0 ? static_cast<std::uint64_t>(world_step) : 0;
+        const auto mapped_step = world_step > 0 ? static_cast<std::uint64_t>(world_step) : 0;
+        frame.step = std::max(mapped_step, last_source_step + 1);
+        last_source_step = frame.step;
         // Webots supplies one simulation clock to every robot and the ecology
         // supervisor. Restore the persisted epoch so a simulator restart does
         // not move sensory timestamps backwards relative to the living network.
@@ -702,7 +719,31 @@ int main() {
           all_actuators[static_cast<std::size_t>(actuator_indices[i])] = 0.75f;
           ++active_motors;
         }
+      celegans_effectors.apply(all_actuators);
+      const float fly_activity = fly_effectors.apply(all_actuators,
+                                                    static_cast<float>(timestep));
       mapper.apply_actuators(all_actuators);
+      if (fly_body) {
+        // Approximate the same bounded, world-vertical wing lift as the local
+        // AARNN controller. The force returns to zero when output holds expire.
+        const double altitude = fly_body->getPosition()[2];
+        double vertical_speed = 0.0;
+        if (std::isfinite(altitude)) {
+          if (fly_altitude_initialized)
+            vertical_speed = std::clamp(
+                (altitude - previous_fly_altitude) / (timestep * 0.001), -3.0, 3.0);
+          previous_fly_altitude = altitude;
+          fly_altitude_initialized = true;
+        }
+        const double requested_force = std::clamp(
+            0.014 * 9.81 + 0.45 * (0.32 - (std::isfinite(altitude) ? altitude : 0.0)) -
+                0.12 * vertical_speed,
+            0.0, 0.20);
+        const double target_force = fly_activity * requested_force;
+        fly_lift_force += std::clamp(target_force - fly_lift_force, -0.05, 0.05);
+        const double force[3] = {0.0, 0.0, fly_lift_force};
+        fly_body->addForce(force, false);
+      }
       if (active_motors > 0 && now >= next_motor_status_log) {
         std::cout << "[nm_api_robot] motor outputs applied robot=" << robot_name
                   << " network=" << binding.network_id

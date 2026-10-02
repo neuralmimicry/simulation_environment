@@ -278,9 +278,14 @@ def outputs(data):
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__); parser.add_argument('--check',action='store_true')
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check',action='store_true')
+    parser.add_argument('--webots-only',action='store_true',
+                        help='generate or check only the Webots habitat PROTOs')
     args=parser.parse_args(); data=compile_catalog(); stale=[]
     for path,content in outputs(data):
+        if args.webots_only and path.parent != ROOT/'webots_world/protos':
+            continue
         if args.check:
             if not path.exists() or path.read_text()!=content: stale.append(str(path.relative_to(ROOT)))
         else:
@@ -290,7 +295,7 @@ def main():
 
 
 
-def webots_habitats(entries, positions):
+def webots_habitats(entries, positions, *, tank_aligned_fish_water=False):
     """Same authored ecology as native/browser, scaled around each species group."""
     data=compile_catalog(); chunks=[]
     groups={}
@@ -303,7 +308,28 @@ def webots_habitats(entries, positions):
         x=sum(p[0] for p in points)/len(points); y=sum(p[1] for p in points)/len(points)
         radius=max(h['half_extent_m'],max(max(abs(px-x),abs(py-y)) for px,py in points)+h['half_extent_m'])
         chunks.append(f'# Shared habitat {h["id"]}; content {data["digest"]}')
-        chunks.append(webots_nodes(h['objects'],radius,(x,y,0),name_prefix=f'nm_{h["id"]}_'))
+        objects = h['objects']
+        if kind == 'zebrafish':
+            # Fluid must be a world-level node. A transparent Solid inside a
+            # habitat Transform is only a visual volume and cannot buoy a fish.
+            water = next(item for item in objects if item['id'] == 'water_volume')
+            objects = [item for item in objects if item['id'] != 'water_volume']
+            if tank_aligned_fish_water and len(points) == 1:
+                fluid_z = 0.1338
+                fluid_size = (0.408, 0.308, 0.1476)
+            else:
+                fluid_z = water['position'][2] * radius
+                fluid_size = tuple(value * radius for value in water['size'])
+            chunks.append('Fluid { name "nm_freshwater" '
+                          f'translation {x:.6f} {y:.6f} {fluid_z:.6f} '
+                          'density 1000 viscosity 0.001 '
+                          'children [ Shape { appearance PBRAppearance { '
+                          'baseColor 0.1 0.43 0.61 roughness 0.65 transparency 0.82 '
+                          f'}} geometry Box {{ size {fluid_size[0]:.6f} '
+                          f'{fluid_size[1]:.6f} {fluid_size[2]:.6f} }} }} ] '
+                          f'boundingObject Box {{ size {fluid_size[0]:.6f} '
+                          f'{fluid_size[1]:.6f} {fluid_size[2]:.6f} }} }}')
+        chunks.append(webots_nodes(objects,radius,(x,y,0),name_prefix=f'nm_{h["id"]}_'))
         light=next(o for o in h['objects'] if o['cue']=='light')
         lx,ly,lz=light['position']
         chunks.append(f'PointLight {{ location {x+lx*radius:.5f} {y+ly*radius:.5f} {lz*radius:.5f} color 1 0.86 0.52 intensity 0.8 radius {radius*3:.4f} attenuation 0 0 1 }}')
@@ -317,12 +343,12 @@ def reference_world(kind, proto_name, proto_ref, controller_args=None):
     height={'celegans':.038,'drosophila':.028,'zebrafish':.14,'hexapod':.19,'nao':.34}[robot_kind]
     args=' '.join(json.dumps(a) for a in (controller_args or ['NM_BRAINS=default']))
     rotation='1 0 0 1.570796' if robot_kind in {'celegans','drosophila'} else '0 0 1 0'
-    physics = 'basicTimeStep 32'
+    physics = 'basicTimeStep 8' if robot_kind == 'drosophila' else 'basicTimeStep 32'
     if robot_kind == 'zebrafish':
-        physics += ''' gravity 2.2 contactProperties [ ContactProperties {
+        physics += ''' gravity 9.81 contactProperties [ ContactProperties {
           material1 "water_body" coulombFriction 0.05 0.05 0.05 bounce 0.1 bounceVelocity 0.02
         } ]'''
-    # Preserve the existing reduced-gravity fish approximation; no CFD is claimed.
+    # Named Fluid and ImmersionProperties supply buoyancy under normal gravity.
     # Webots default camera looks down local -Z; rotation about X gives an oblique Z-up view.
     return f'''#VRML_SIM R2025a utf8
 # Generated shared habitat; source sim/content/catalog.json; {data['digest']}
