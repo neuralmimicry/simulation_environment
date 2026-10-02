@@ -69,7 +69,7 @@
         header_file="$(mktemp)"
         trap 'rm -f "$header_file"' EXIT
         printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
-        curl --fail --silent --show-error --header "@${header_file}" \
+        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
           "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
               [.networks[] | select(.network_id == $network_id)] as $matches
@@ -220,7 +220,7 @@
         header_file="$(mktemp)"
         trap 'rm -f "$header_file"' EXIT
         printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
-        curl --fail --silent --show-error --header "@${header_file}" \
+        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
           "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
               [.networks[] | select(.network_id == $network_id)] as $matches
@@ -662,7 +662,7 @@
         header_file="$(mktemp)"
         trap 'rm -f "$header_file"' EXIT
         printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
-        curl --fail --silent --show-error --header "@${header_file}" \
+        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
           "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
               [.networks[] | select(.network_id == $network_id)] as $matches
