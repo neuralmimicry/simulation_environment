@@ -1,4 +1,118 @@
 ---
+- name: Resolve the live shared-SNN sensory ingress owner
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
+    - ../vars/neuralmimicry-site.yml
+  vars:
+    simulation_environment_webots_verify_snn_id: >-
+      {{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].network_id }}
+  tasks:
+    - name: Require the Webots AARNN API token for live sensory verification
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_access_token | length > 0
+        fail_msg: The AARNN Webots API token is required for live shared-SNN verification.
+      no_log: true
+
+    - name: Read live shared-SNN placement from the AARNN API
+      ansible.builtin.uri:
+        url: "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ simulation_environment_webots_access_token }}"
+        return_content: true
+        status_code: 200
+        timeout: 30
+      register: simulation_environment_webots_verify_live_status
+      no_log: true
+
+    - name: Require one playing shared-SNN network in the AARNN status
+      ansible.builtin.assert:
+        that:
+          - >-
+            (simulation_environment_webots_verify_live_status.json.networks
+             | selectattr('network_id', 'equalto', simulation_environment_webots_verify_snn_id)
+             | list | length) == 1
+          - >-
+            (simulation_environment_webots_verify_live_status.json.networks
+             | selectattr('network_id', 'equalto', simulation_environment_webots_verify_snn_id)
+             | first).playing | bool
+        fail_msg: >-
+          The shared-SNN network is missing or paused; sensory-consumption checks
+          cannot proceed.
+
+    - name: Initialize the active sensory-owner list
+      ansible.builtin.set_fact:
+        simulation_environment_webots_verify_sensory_owner_ids: []
+
+    - name: Collect live owners of the shared-SNN sensory layer
+      ansible.builtin.set_fact:
+        simulation_environment_webots_verify_sensory_owner_ids: >-
+          {{ simulation_environment_webots_verify_sensory_owner_ids + [item.node_id] }}
+      loop: >-
+        {{ (simulation_environment_webots_verify_live_status.json.networks
+            | selectattr('network_id', 'equalto', simulation_environment_webots_verify_snn_id)
+            | first).distribution | default([]) }}
+      when: 0 in (item.layers | default([]))
+      loop_control:
+        label: "{{ item.node_id }}"
+
+    - name: Require one native owner for the shared-SNN sensory layer
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_verify_sensory_owner_ids | length == 1
+          - simulation_environment_webots_verify_sensory_owner_ids[0] is match('^native-')
+        fail_msg: >-
+          Expected exactly one native worker to own sensory layer 0; found
+          {{ simulation_environment_webots_verify_sensory_owner_ids }}.
+
+    - name: Resolve the current sensory owner's inventory host
+      ansible.builtin.set_fact:
+        simulation_environment_webots_verify_sensory_owner_host: >-
+          {{ simulation_environment_webots_verify_sensory_owner_ids[0]
+             | regex_replace('^native-', '') }}
+
+- name: Verify committed Webots AER frames are consumed by the shared SNN
+  hosts: aarnn_sensory_workers
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
+    - ../vars/neuralmimicry-site.yml
+  vars:
+    simulation_environment_webots_verify_snn_id: >-
+      {{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].network_id }}
+    simulation_environment_webots_verify_consumed_pattern: >-
+      consumed AER sensory frame network={{ simulation_environment_webots_verify_snn_id }}
+      sequence=[0-9]+ input_spikes=[1-9][0-9]* runner_step=[0-9]+
+  tasks:
+    - name: Require a committed sensory frame to complete a biological neural step
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - --unit
+          - aarnn-node.service
+          - --since
+          - 30 minutes ago
+          - --no-pager
+          - --output=cat
+          - --grep
+          - "{{ simulation_environment_webots_verify_consumed_pattern }}"
+      register: simulation_environment_webots_verify_consumed_frame
+      changed_when: false
+      failed_when: false
+      when: >-
+        inventory_hostname
+        == hostvars['localhost'].simulation_environment_webots_verify_sensory_owner_host
+      until: >-
+        simulation_environment_webots_verify_consumed_frame.stdout is search(
+          simulation_environment_webots_verify_consumed_pattern)
+      retries: 90
+      delay: 2
+
 - name: Verify the persistent shared Webots world and AARNN I/O paths
   hosts: webots_fleet
   become: true
