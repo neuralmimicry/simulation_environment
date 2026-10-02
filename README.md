@@ -219,6 +219,16 @@ bound pair, checks the configured sensor/actuator dimensions, requires one
 active world on `sm00` with `sm01` stopped, and confirms the persisted common
 clock continues advancing.
 
+The 2026-10-02 live acceptance check confirmed the shared world and 32-sensor /
+16-actuator connection, but it did not pass the neural-output gate. The robot
+committed frames with 12 active AER input channels; the shared-SNN activity
+projection reported zero output spikes and zero mapped actuators, and no motor
+application was observed. The detailed result is in
+[`docs/verification/live-shared-world-acceptance-2026-10-02.md`](docs/verification/live-shared-world-acceptance-2026-10-02.md).
+Keep the live shared SNN running and repeat the full check after resolving the
+missing output activity; a successful sensory admission alone is not end-to-end
+robot I/O evidence.
+
 The authenticated browser broker, world catalogue, robot bindings, controllers,
 and Ansible runtime installation all live in this repository. The website's
 `/webots` route and the Continuum Ansible playbook provide the sign-in and
