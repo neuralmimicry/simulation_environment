@@ -19,6 +19,11 @@ legacy_source_revision="$(
 binding_revision="${NM_WEBOTS_BINDINGS_REVISION:-unconfigured}"
 source_revision="$(printf '%s\n%s\n' "$legacy_source_revision" "$binding_revision" | sha256sum | cut -d' ' -f1)"
 
+if [[ "${1:-}" == "--print-source-revision" ]]; then
+  printf '%s\n' "$source_revision"
+  exit 0
+fi
+
 if [[ -s "$runtime_world" ]]; then
   revision_file="${runtime_world}.source-revision"
   saved_revision=""

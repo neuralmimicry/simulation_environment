@@ -48,6 +48,7 @@ simulation_environment_webots_require_network_bindings: false
 simulation_environment_webots_build_controllers: true
 simulation_environment_webots_runtime_service: nm-webots-shared-world.service
 simulation_environment_webots_runtime_script: /usr/local/sbin/nm-webots-shared-world
+simulation_environment_webots_preserve_runtime_viewpoint: false
 simulation_environment_webots_open_gl_vendor: nvidia
 simulation_environment_webots_stream_allowed_sources:
   # Webots is exposed through the authenticated Kubernetes ingress. Restrict

@@ -394,6 +394,14 @@
     mode: "0755"
   notify: Reload systemd and restart the shared Webots world
 
+- name: Install the saved-world viewpoint updater
+  ansible.builtin.copy:
+    src: preserve-runtime-viewpoint.sh
+    dest: /usr/local/sbin/nm-webots-preserve-runtime-viewpoint
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Configure the source world and stream port for the runtime launcher
   ansible.builtin.copy:
     dest: /etc/default/nm-webots-shared-world
@@ -405,6 +413,78 @@
       NM_WEBOTS_STREAM_PORT={{ simulation_environment_webots_port }}
       NM_WEBOTS_BINDINGS_REVISION={{ simulation_environment_webots_network_bindings | dictsort | to_json | hash('sha256') }}
   notify: Reload systemd and restart the shared Webots world
+
+- name: Check for a saved world before applying a viewpoint-only deployment
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_state_world }}"
+  register: simulation_environment_webots_saved_world
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Require a saved world for the requested viewpoint-only deployment
+  ansible.builtin.assert:
+    that:
+      - simulation_environment_webots_saved_world.stat.exists | default(false)
+      - simulation_environment_webots_saved_world.stat.size | default(0) | int > 0
+    fail_msg: >-
+      The persistent Webots snapshot is missing on {{ inventory_hostname }};
+      refusing to restart it with runtime-viewpoint preservation enabled.
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Stop Webots cleanly before updating the saved camera viewpoint
+  ansible.builtin.systemd:
+    name: "{{ simulation_environment_webots_runtime_service }}"
+    state: stopped
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Copy only the new startup viewpoint into the saved world snapshot
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/nm-webots-preserve-runtime-viewpoint
+      - "{{ simulation_environment_webots_repo_path }}/webots_world/worlds/shared_fleet_neuroworld.wbt"
+      - "{{ simulation_environment_webots_state_world }}"
+  register: simulation_environment_webots_viewpoint_update
+  changed_when: true
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Calculate the new source revision for the preserved snapshot
+  ansible.builtin.command:
+    argv:
+      - "{{ simulation_environment_webots_runtime_script }}"
+      - --print-source-revision
+  environment:
+    NM_WEBOTS_RUNTIME_WORLD_FILE: "{{ simulation_environment_webots_state_world }}"
+    NM_WEBOTS_SOURCE_WORLD_FILE: "{{ simulation_environment_webots_repo_path }}/webots_world/worlds/shared_fleet_neuroworld.wbt"
+    NM_WEBOTS_BINDINGS_REVISION: "{{ simulation_environment_webots_network_bindings | dictsort | to_json | hash('sha256') }}"
+  register: simulation_environment_webots_preserved_world_revision
+  changed_when: false
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Mark the saved world as compatible with the updated camera-only source
+  ansible.builtin.copy:
+    content: "{{ simulation_environment_webots_preserved_world_revision.stdout }}\n"
+    dest: "{{ simulation_environment_webots_state_world }}.source-revision"
+    owner: "{{ simulation_environment_webots_service_user }}"
+    group: "{{ simulation_environment_webots_service_user }}"
+    mode: "0640"
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
 
 - name: Create the nftables include directory
   ansible.builtin.file:

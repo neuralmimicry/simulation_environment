@@ -42,6 +42,13 @@ compute host. Sign in at
 `https://neuralmimicry.ai/webots`; the page connects to the authenticated
 `wss://webots.neuralmimicry.ai/stream` viewer stream.
 
+For a camera-only `Viewpoint` change, use
+`-e simulation_environment_webots_preserve_runtime_viewpoint=true` with that
+playbook. It gracefully saves the live world and shared clock, copies only the
+new `Viewpoint` into the saved scene, then restarts Webots from that scene.
+Use this option only when the saved world remains compatible with the source
+world and PROTO graph.
+
 Robot slots default to unbound so the world can be inspected before selecting
 networks. The current NeuralMimicry site profile defines one generic 32/16
 binding: `neuralmimicry-shared-snn`. Earlier Celegans and

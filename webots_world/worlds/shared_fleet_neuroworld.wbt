@@ -31,10 +31,10 @@ WorldInfo {
   ]
 }
 Viewpoint {
-  fieldOfView 1.12
-  # A broad Z-up view that keeps the agar, orchard, stream and wildlife visible.
-  orientation 1 0 0 1.02
-  position 0 -18 11
+  fieldOfView 0.98
+  # Level overview centered on the shared habitats, with the south edge nearest.
+  orientation -0.344286 0.344286 0.873461 1.705677
+  position 0 -21 20
 }
 TexturedBackground {
   texture "noon_cloudy_countryside"
