@@ -2,7 +2,9 @@
 - name: Apply the Webots stream firewall
   ansible.builtin.systemd:
     name: nm-webots-stream-firewall.service
-    state: restarted
+    # ExecReload atomically reapplies nftables without stopping dependent
+    # services, which would otherwise restart the persistent Webots world.
+    state: reloaded
     enabled: true
     daemon_reload: true
 

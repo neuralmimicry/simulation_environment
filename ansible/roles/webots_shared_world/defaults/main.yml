@@ -51,9 +51,13 @@ simulation_environment_webots_runtime_script: /usr/local/sbin/nm-webots-shared-w
 simulation_environment_webots_open_gl_vendor: nvidia
 simulation_environment_webots_stream_allowed_sources:
   # Webots is exposed through the authenticated Kubernetes ingress. Restrict
-  # its raw W3D socket to that cluster's ingress/pod networks and local probes.
+  # its raw W3D socket to ingress pods and the Kubernetes node addresses.
+  # K3s SNATs ingress-pod traffic to the node IP before it reaches sm00, so
+  # these addresses must cover every schedulable ingress node.
   - 127.0.0.1/32
   - 192.168.1.2/32
+  - 192.168.1.61/32
+  - 192.168.1.65/32
   - 10.42.0.0/24
   - 10.42.1.0/24
   - 10.42.2.0/24
