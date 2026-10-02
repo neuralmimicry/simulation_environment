@@ -1,5 +1,8 @@
-#include <webots/Robot.hpp>
+#include <webots/Supervisor.hpp>
 #include <device_mapper.hpp>
+#include "coalesced_frame_metrics.hpp"
+#include "inference_retry_policy.hpp"
+#include "neural_effectors.hpp"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -25,7 +28,7 @@
 
 using nlohmann::json;
 using webots::DeviceMapper;
-using webots::Robot;
+using webots::Supervisor;
 
 namespace {
 struct Binding {
@@ -60,9 +63,42 @@ std::string read_file(const std::string &path) {
   return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
+std::string read_token(const std::string &path) {
+  std::string token = read_file(path);
+  token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char ch) {
+                return std::isspace(ch);
+              }),
+              token.end());
+  return token;
+}
+
+double load_world_elapsed_seconds(const std::string &world_path) {
+  if (world_path.empty())
+    return 0.0;
+  std::ifstream input(world_path + ".clock");
+  double elapsed = 0.0;
+  if (input >> elapsed && std::isfinite(elapsed) && elapsed > 0.0)
+    return elapsed;
+  return 0.0;
+}
+
 std::string env_or(const char *key, const char *fallback) {
   const char *value = std::getenv(key);
   return value && *value ? value : fallback;
+}
+
+std::string make_session_id(const std::string &robot_name) {
+  std::string safe_name;
+  safe_name.reserve(std::min<std::size_t>(robot_name.size(), 48));
+  for (const unsigned char ch : robot_name) {
+    if (safe_name.size() == 48)
+      break;
+    safe_name.push_back(std::isalnum(ch) || ch == '-' || ch == '_' ? ch : '-');
+  }
+  if (safe_name.empty())
+    safe_name = "robot";
+  const auto epoch = std::chrono::steady_clock::now().time_since_epoch().count();
+  return "webots-" + safe_name + "-" + std::to_string(epoch);
 }
 
 size_t append_response(char *data, size_t size, size_t count, void *opaque) {
@@ -73,7 +109,8 @@ size_t append_response(char *data, size_t size, size_t count, void *opaque) {
 
 HttpResult perform_http(CURL *curl, const std::string &url,
                         const std::string &token,
-                        const std::string *post_body = nullptr) {
+                        const std::string *post_body = nullptr,
+                        long timeout_ms = 25000L) {
   curl_easy_reset(curl);
   HttpResult result;
   struct curl_slist *headers = nullptr;
@@ -88,7 +125,9 @@ HttpResult perform_http(CURL *curl, const std::string &url,
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_response);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 5000L);
+  // Bound each request by the remaining same-frame retry budget. Simulation
+  // stepping continues on its independent controller thread.
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, std::max(1L, timeout_ms));
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   if (post_body) {
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -111,13 +150,16 @@ HttpResult perform_http(CURL *curl, const std::string &url,
 class InferenceWorker {
  public:
   InferenceWorker(std::string api_base, std::string activity_addr,
-                  std::string token, std::string network_id, std::string robot_name,
+                  std::string token_file, std::string token,
+                  std::string network_id, std::string robot_name,
                   std::size_t actuator_count, float input_spike_threshold)
       : api_base_(std::move(api_base)),
         activity_addr_(std::move(activity_addr)),
+        token_file_(std::move(token_file)),
         token_(std::move(token)),
         network_id_(std::move(network_id)),
         robot_name_(std::move(robot_name)),
+        session_id_(make_session_id(robot_name_)),
         actuator_count_(actuator_count),
         input_spike_threshold_(std::isfinite(input_spike_threshold)
                                    ? std::clamp(input_spike_threshold, 0.0f, 1.0f)
@@ -129,7 +171,11 @@ class InferenceWorker {
   void submit(Frame frame) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      pending_ = std::move(frame);  // A slow API call drops stale frames, never grows a queue.
+      if (stopping_ || session_stopped_)
+        return;
+      if (has_pending_)
+        coalesced_frames_.record_replacement(pending_.step);
+      pending_ = std::move(frame);  // Keep only the latest unadmitted sample.
       has_pending_ = true;
     }
     condition_.notify_one();
@@ -157,9 +203,11 @@ class InferenceWorker {
  private:
   std::string api_base_;
   std::string activity_addr_;
+  std::string token_file_;
   std::string token_;
   std::string network_id_;
   std::string robot_name_;
+  std::string session_id_;
   std::size_t actuator_count_;
   float input_spike_threshold_;
   std::uint64_t last_activity_step_ = 0;
@@ -169,15 +217,50 @@ class InferenceWorker {
   Frame pending_;
   bool has_pending_ = false;
   bool stopping_ = false;
+  bool session_stopped_ = false;
   std::vector<std::uint32_t> outputs_;
   bool outputs_pending_ = false;
+  nm_webots::CoalescedFrameMetrics coalesced_frames_;
+  std::chrono::steady_clock::time_point next_activity_warning_ =
+      std::chrono::steady_clock::time_point::min();
   std::thread thread_;
 
-  bool infer(CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result,
-             double &request_ms, long &new_connections) {
-    // Inject sensory spikes without asking the orchestrator to rediscover the
-    // active node, then read current activity through a direct cluster node.
-    // /api/aer/infer repeats discovery and can wait five seconds for output.
+  bool reload_rotated_token() {
+    const std::string current = read_token(token_file_);
+    if (current.empty() || current == token_)
+      return false;
+    token_ = current;
+    std::cout << "[nm_api_robot] reloaded rotated service credential robot="
+              << robot_name_ << " network=" << network_id_ << std::endl;
+    return true;
+  }
+
+  HttpResult perform_authenticated_http(CURL *curl, const std::string &url,
+                                        const std::string *post_body = nullptr,
+                                        long timeout_ms = 25000L) {
+    const auto started = std::chrono::steady_clock::now();
+    HttpResult response = perform_http(curl, url, token_, post_body, timeout_ms);
+    if (response.code != CURLE_OK || response.status != 401 || !reload_rotated_token())
+      return response;
+
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
+    const long remaining_timeout_ms =
+        std::max(1L, timeout_ms - static_cast<long>(elapsed_ms));
+    HttpResult retry = perform_http(curl, url, token_, post_body, remaining_timeout_ms);
+    retry.total_time_seconds += response.total_time_seconds;
+    retry.new_connections += response.new_connections;
+    return retry;
+  }
+
+  nm_webots::InjectionResult infer(
+      CURL *curl, const Frame &frame, std::vector<std::uint32_t> &result,
+      bool &activity_available, double &request_ms, long &new_connections,
+      long injection_timeout_ms) {
+    // Leave the injection address unset so the orchestrator can choose the
+    // current sensory bridge and preserve cluster fan-out. A configured worker
+    // address may be a backup or become stale after a placement change.
     std::vector<std::uint32_t> input_spike_indices;
     input_spike_indices.reserve(frame.values.size());
     for (std::size_t i = 0; i < frame.values.size(); ++i) {
@@ -187,16 +270,16 @@ class InferenceWorker {
     }
 
     json request = {{"network_id", network_id_},
+                    {"session_id", session_id_},
                     {"step_index", frame.step},
                     {"time_ms", frame.time_ms},
                     {"dt_ms", frame.dt_ms},
                     {"aer_base", 0},
                     {"spike_indices", input_spike_indices}};
-    if (!activity_addr_.empty())
-      request["addr"] = activity_addr_;
     const std::string body = request.dump();
     request_ms = 0.0;
     new_connections = 0;
+    activity_available = false;
     auto account_request = [&](const HttpResult &http) {
       request_ms += http.total_time_seconds * 1000.0;
       new_connections += http.new_connections;
@@ -218,11 +301,13 @@ class InferenceWorker {
       std::cerr << std::endl;
     };
 
-    const HttpResult injection = perform_http(curl, api_base_ + "/aer/inject", token_, &body);
+    const HttpResult injection = perform_authenticated_http(
+        curl, api_base_ + "/simulation/aer/inject", &body, injection_timeout_ms);
     account_request(injection);
     if (injection.code != CURLE_OK || injection.status < 200 || injection.status >= 300) {
       log_http_failure("inject", injection);
-      return false;
+      return nm_webots::classify_injection_failure(injection.code != CURLE_OK,
+                                                   injection.status);
     }
 
     char *escaped_network = curl_easy_escape(
@@ -230,7 +315,7 @@ class InferenceWorker {
     if (!escaped_network) {
       std::cerr << "[nm_api_robot] cannot encode activity query robot=" << robot_name_
                 << " network=" << network_id_ << std::endl;
-      return false;
+      return nm_webots::InjectionResult::admitted;
     }
     const std::string network_query = escaped_network;
     curl_free(escaped_network);
@@ -241,25 +326,32 @@ class InferenceWorker {
       if (!escaped_addr) {
         std::cerr << "[nm_api_robot] cannot encode activity address robot=" << robot_name_
                   << " network=" << network_id_ << std::endl;
-        return false;
+        return nm_webots::InjectionResult::admitted;
       }
       activity_url += "&addr=";
       activity_url += escaped_addr;
       curl_free(escaped_addr);
     }
 
-    HttpResult activity = perform_http(curl, activity_url, token_);
+    HttpResult activity = perform_authenticated_http(curl, activity_url);
     account_request(activity);
     if ((activity.code != CURLE_OK || activity.status >= 500) && !activity_addr_.empty()) {
       // The cached direct node may be offline. Let the API's normal cluster
       // discovery select a replacement, then follow its returned source.
       const std::string fallback_url = api_base_ + "/activity?network_id=" + network_query;
-      activity = perform_http(curl, fallback_url, token_);
+      activity = perform_authenticated_http(curl, fallback_url);
       account_request(activity);
     }
     if (activity.code != CURLE_OK || activity.status < 200 || activity.status >= 300) {
-      log_http_failure("activity", activity);
-      return false;
+      // Sensory admission already succeeded. The AARNN activity endpoint is
+      // a best-effort projection and may return 503 while the network is
+      // traversing; do not treat that as a rejected frame or back off input.
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= next_activity_warning_) {
+        log_http_failure("activity projection", activity);
+        next_activity_warning_ = now + std::chrono::seconds(30);
+      }
+      return nm_webots::InjectionResult::admitted;
     }
 
     try {
@@ -288,16 +380,57 @@ class InferenceWorker {
       }
       last_activity_step_ = sim_step;
       has_last_activity_step_ = true;
-      const std::string source = parsed.value("source", std::string{});
-      if (!source.empty())
-        activity_addr_ = source;
-      return true;
+      activity_available = true;
+      return nm_webots::InjectionResult::admitted;
     } catch (const std::exception &error) {
       std::cerr << "[nm_api_robot] invalid activity response robot=" << robot_name_
                 << " network=" << network_id_ << " step=" << frame.step
                 << " reason=" << error.what() << "\n";
-      return false;
+      // The sensory frame was admitted; a malformed optional projection must
+      // not trigger exponential backoff for later controller frames.
+      return nm_webots::InjectionResult::admitted;
     }
+  }
+
+  void stop_input_session(const char *reason, const Frame &frame,
+                          std::chrono::steady_clock::duration elapsed) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      session_stopped_ = true;
+      has_pending_ = false;
+    }
+    condition_.notify_one();
+    std::cerr << "[nm_api_robot] input session stopped robot=" << robot_name_
+              << " network=" << network_id_ << " session=" << session_id_
+              << " step=" << frame.step << " reason=" << reason
+              << " elapsed_ms="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << std::endl;
+  }
+
+  void expire_input_frame(const Frame &frame,
+                          std::chrono::steady_clock::duration elapsed) const {
+    // The old frame cannot be safely retried forever, but a transient
+    // orchestrator/bridge outage must not permanently disable this robot.
+    // submit() keeps only the newest world frame, so the worker can resume
+    // from the shared world clock as soon as the route becomes available.
+    std::cerr << "[nm_api_robot] sensory frame expired robot=" << robot_name_
+              << " network=" << network_id_ << " session=" << session_id_
+              << " step=" << frame.step << " reason=same-frame retry window expired"
+              << " elapsed_ms="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << " action=resume with latest world frame" << std::endl;
+  }
+
+  void log_coalesced_frames(const nm_webots::CoalescedFrameSnapshot &snapshot) const {
+    if (snapshot.count == 0)
+      return;
+    std::clog << "[nm_api_robot] unadmitted frames coalesced robot=" << robot_name_
+              << " network=" << network_id_
+              << " count_since_report=" << snapshot.count
+              << " first_skipped_world_step=" << snapshot.first_step
+              << " last_skipped_world_step=" << snapshot.last_step
+              << " total_coalesced=" << snapshot.total << std::endl;
   }
 
   void run() {
@@ -305,68 +438,137 @@ class InferenceWorker {
     if (!curl) {
       std::cerr << "[nm_api_robot] cannot create HTTP client robot=" << robot_name_
                 << " network=" << network_id_ << std::endl;
+      std::lock_guard<std::mutex> lock(mutex_);
+      session_stopped_ = true;
       return;
     }
 
     std::uint64_t successful_frames = 0;
-    std::uint32_t consecutive_failures = 0;
-    auto retry_after = std::chrono::steady_clock::time_point::min();
     auto next_status_log = std::chrono::steady_clock::now();
     while (true) {
       Frame frame;
+      nm_webots::CoalescedFrameSnapshot coalesced_snapshot;
       {
         std::unique_lock<std::mutex> lock(mutex_);
-        condition_.wait(lock, [this] { return stopping_ || has_pending_; });
-        if (retry_after > std::chrono::steady_clock::now())
-          condition_.wait_until(lock, retry_after, [this] { return stopping_; });
-        if (stopping_)
+        condition_.wait(lock, [this] {
+          return stopping_ || session_stopped_ || has_pending_;
+        });
+        if (stopping_ || session_stopped_)
           break;
         frame = std::move(pending_);
         has_pending_ = false;
+        coalesced_snapshot = coalesced_frames_.take_snapshot();
       }
+      log_coalesced_frames(coalesced_snapshot);
+
       std::vector<std::uint32_t> next_outputs;
-      double request_ms = 0.0;
-      long new_connections = 0;
-      if (infer(curl, frame, next_outputs, request_ms, new_connections)) {
-        const auto mapped_outputs = static_cast<std::size_t>(std::count_if(
-            next_outputs.begin(), next_outputs.end(),
-            [this](std::uint32_t index) { return index < actuator_count_; }));
+      bool activity_available = false;
+      double total_request_ms = 0.0;
+      long total_new_connections = 0;
+      const auto retry_started = std::chrono::steady_clock::now();
+      std::uint32_t retry_index = 0;
+      bool frame_finished = false;
+      while (!frame_finished) {
         {
           std::lock_guard<std::mutex> lock(mutex_);
-          outputs_ = next_outputs;
-          outputs_pending_ = true;
+          if (stopping_) {
+            frame_finished = true;
+            break;
+          }
         }
-        ++successful_frames;
-        const auto now = std::chrono::steady_clock::now();
-        if (successful_frames == 1 || now >= next_status_log) {
-          std::cout << "[nm_api_robot] inference ok robot=" << robot_name_
-                    << " network=" << network_id_
-                    << " successful_frames=" << successful_frames
-                    << " step=" << frame.step
-                    << " input_spikes=" << std::count_if(
-                           frame.values.begin(), frame.values.end(),
-                           [this](float value) {
-                             return std::isfinite(value) && value >= input_spike_threshold_;
-                           })
-                    << " output_spikes=" << next_outputs.size()
-                    << " mapped_actuators=" << mapped_outputs
-                    << " request_ms=" << static_cast<long>(request_ms)
-                    << " new_connections=" << new_connections << std::endl;
-          next_status_log = now + std::chrono::seconds(30);
+
+        const auto before_request = std::chrono::steady_clock::now();
+        const auto elapsed = before_request - retry_started;
+        const auto remaining = nm_webots::kSameFrameRetryWindow - elapsed;
+        if (remaining <= std::chrono::steady_clock::duration::zero()) {
+          expire_input_frame(frame, elapsed);
+          frame_finished = true;
+          break;
         }
-        consecutive_failures = 0;
-        retry_after = std::chrono::steady_clock::time_point::min();
-      } else {
-        ++consecutive_failures;
-        const auto exponent = std::min<std::uint32_t>(consecutive_failures - 1, 6);
-        const auto delay = std::min(std::chrono::milliseconds(30000),
-                                    std::chrono::milliseconds(500 * (1u << exponent)));
-        retry_after = std::chrono::steady_clock::now() + delay;
-        std::cerr << "[nm_api_robot] retry scheduled robot=" << robot_name_
-                  << " network=" << network_id_ << " delay_ms=" << delay.count()
-                  << " consecutive_failures=" << consecutive_failures << std::endl;
+        const long timeout_ms = std::max(
+            1L, static_cast<long>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(remaining)
+                        .count()));
+
+        double attempt_request_ms = 0.0;
+        long attempt_new_connections = 0;
+        const auto injection_result = infer(
+            curl, frame, next_outputs, activity_available, attempt_request_ms,
+            attempt_new_connections, timeout_ms);
+        total_request_ms += attempt_request_ms;
+        total_new_connections += attempt_new_connections;
+
+        if (injection_result == nm_webots::InjectionResult::admitted) {
+          const auto mapped_outputs = static_cast<std::size_t>(std::count_if(
+              next_outputs.begin(), next_outputs.end(),
+              [this](std::uint32_t index) { return index < actuator_count_; }));
+          if (activity_available) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            outputs_ = next_outputs;
+            outputs_pending_ = true;
+          }
+          ++successful_frames;
+          const auto now = std::chrono::steady_clock::now();
+          if (successful_frames == 1 || now >= next_status_log) {
+            std::cout << "[nm_api_robot] sensory frame admitted robot="
+                      << robot_name_ << " network=" << network_id_
+                      << " admitted_frames=" << successful_frames
+                      << " step=" << frame.step << " input_spikes="
+                      << std::count_if(frame.values.begin(), frame.values.end(),
+                                       [this](float value) {
+                                         return std::isfinite(value) &&
+                                                value >= input_spike_threshold_;
+                                       })
+                      << " activity_snapshot="
+                      << (activity_available ? "available" : "pending");
+            if (activity_available)
+              std::cout << " output_spikes=" << next_outputs.size()
+                        << " mapped_actuators=" << mapped_outputs;
+            std::cout << " request_ms=" << static_cast<long>(total_request_ms)
+                      << " new_connections=" << total_new_connections << std::endl;
+            next_status_log = now + std::chrono::seconds(30);
+          }
+          frame_finished = true;
+        } else if (injection_result == nm_webots::InjectionResult::permanent_failure) {
+          stop_input_session("permanent injection error", frame,
+                             std::chrono::steady_clock::now() - retry_started);
+          frame_finished = true;
+        } else {
+          const auto retry_now = std::chrono::steady_clock::now();
+          const auto retry_elapsed = retry_now - retry_started;
+          const auto retry_remaining = nm_webots::kSameFrameRetryWindow - retry_elapsed;
+          if (retry_remaining <= std::chrono::steady_clock::duration::zero()) {
+            expire_input_frame(frame, retry_elapsed);
+            frame_finished = true;
+            break;
+          }
+          const auto policy_delay = nm_webots::same_frame_retry_delay(retry_index++);
+          const auto delay = std::min(
+              policy_delay,
+              std::chrono::duration_cast<std::chrono::milliseconds>(retry_remaining));
+          std::cerr << "[nm_api_robot] retrying same sensory frame robot="
+                    << robot_name_ << " network=" << network_id_
+                    << " session=" << session_id_ << " step=" << frame.step
+                    << " delay_ms=" << delay.count()
+                    << " elapsed_ms="
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(retry_elapsed).count()
+                    << " retry_index=" << retry_index << std::endl;
+          std::unique_lock<std::mutex> lock(mutex_);
+          condition_.wait_for(lock, delay, [this] { return stopping_; });
+          if (stopping_) {
+            frame_finished = true;
+            break;
+          }
+        }
       }
     }
+
+    nm_webots::CoalescedFrameSnapshot final_coalesced_snapshot;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      final_coalesced_snapshot = coalesced_frames_.take_snapshot();
+    }
+    log_coalesced_frames(final_coalesced_snapshot);
     curl_easy_cleanup(curl);
   }
 };
@@ -388,8 +590,10 @@ Binding load_binding(const json &config, const std::string &robot_name) {
 }  // namespace
 
 int main() {
-  Robot robot;
+  Supervisor robot;
   const int timestep = static_cast<int>(robot.getBasicTimeStep());
+  const double world_elapsed_before_start = load_world_elapsed_seconds(
+      env_or("NM_WEBOTS_RUNTIME_WORLD_FILE", ""));
   DeviceMapper mapper;
   mapper.discover(robot, timestep);
 
@@ -417,6 +621,10 @@ int main() {
   std::vector<int> actuator_indices;
   const auto sensor_names = mapper.get_sensor_names();
   const auto actuator_names = mapper.get_actuator_names();
+  nm_webots::CelegansSpineEffectors celegans_effectors(static_cast<float>(timestep));
+  nm_webots::FlyEffectors fly_effectors;
+  celegans_effectors.discover(actuator_names);
+  fly_effectors.discover(actuator_names);
   try {
     binding = load_binding(config, robot_name);
     for (std::size_t i = 0; i < sensor_names.size(); ++i)
@@ -429,15 +637,15 @@ int main() {
     const std::string api_base = config.value("api_base", "https://aarnn.neuralmimicry.ai/api");
     const std::string activity_addr = config.value("activity_addr", "");
     const std::string token_file = config.value("access_token_file", "");
-    std::string token = read_file(token_file);
-    token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char c) { return std::isspace(c); }), token.end());
+    std::string token = read_token(token_file);
     if (!binding.network_id.empty() && !token.empty()) {
       if ((binding.expected_sensory && sensor_indices.size() != binding.expected_sensory) ||
           (binding.expected_outputs && actuator_indices.size() != binding.expected_outputs)) {
         throw std::runtime_error("Webots device alignment differs from the configured AARNN profile");
       }
       curl_global_init(CURL_GLOBAL_DEFAULT);
-      worker = std::make_unique<InferenceWorker>(api_base, activity_addr, token,
+      worker = std::make_unique<InferenceWorker>(api_base, activity_addr,
+                                                 token_file, token,
                                                  binding.network_id, robot_name,
                                                  actuator_indices.size(),
                                                  config.value("input_spike_threshold", 0.5f));
@@ -457,20 +665,40 @@ int main() {
   const auto output_hold = std::chrono::milliseconds(
       std::max(20, config.value("output_hold_ms", 1500)));
   auto next_inference = std::chrono::steady_clock::now();
+  std::uint64_t last_source_step = 0;
   std::vector<float> all_sensors(static_cast<std::size_t>(mapper.get_sensory_size()));
   std::vector<float> all_actuators(static_cast<std::size_t>(mapper.get_output_size()), 0.5f);
   std::vector<std::chrono::steady_clock::time_point> output_until(actuator_indices.size());
-  std::uint64_t step_index = 0;
+  auto next_motor_status_log = std::chrono::steady_clock::time_point::min();
+  webots::Node *fly_body = worker && fly_effectors.active() ? robot.getSelf() : nullptr;
+  double fly_lift_force = 0.0;
+  double previous_fly_altitude = 0.0;
+  bool fly_altitude_initialized = false;
 
   while (robot.step(timestep) != -1) {
-    ++step_index;
     if (worker) {
       mapper.fill_sensors(all_sensors);
       const auto now = std::chrono::steady_clock::now();
       if (now >= next_inference) {
+        const double world_time_ms =
+            (world_elapsed_before_start + robot.getTime()) * 1000.0;
+        // Preserve the shared world's established 32 ms source-sequence
+        // mapping when the physics step is refined to 8 ms for flight. Capture
+        // time stays at the actual Webots instant; two captures in one source
+        // quantum receive distinct sequence numbers in this session.
+        constexpr double kSourceSequenceQuantumMs = 32.0;
+        const auto world_step = std::llround(world_time_ms / kSourceSequenceQuantumMs);
         Frame frame;
-        frame.step = step_index;
-        frame.time_ms = robot.getTime() * 1000.0;
+        // Sparse AARNN ingress sequences frames by step_index. Derive it from
+        // the shared, persisted world clock instead of advancing a private
+        // controller counter, so every network sees the same world timeline.
+        const auto mapped_step = world_step > 0 ? static_cast<std::uint64_t>(world_step) : 0;
+        frame.step = std::max(mapped_step, last_source_step + 1);
+        last_source_step = frame.step;
+        // Webots supplies one simulation clock to every robot and the ecology
+        // supervisor. Restore the persisted epoch so a simulator restart does
+        // not move sensory timestamps backwards relative to the living network.
+        frame.time_ms = world_time_ms;
         frame.dt_ms = timestep;
         frame.values.reserve(sensor_indices.size());
         for (int index : sensor_indices)
@@ -485,10 +713,43 @@ int main() {
           if (index < output_until.size())
             output_until[index] = now + output_hold;
       std::fill(all_actuators.begin(), all_actuators.end(), 0.5f);
+      std::size_t active_motors = 0;
       for (std::size_t i = 0; i < actuator_indices.size(); ++i)
-        if (output_until[i] > now)
+        if (output_until[i] > now) {
           all_actuators[static_cast<std::size_t>(actuator_indices[i])] = 0.75f;
+          ++active_motors;
+        }
+      celegans_effectors.apply(all_actuators);
+      const float fly_activity = fly_effectors.apply(all_actuators,
+                                                    static_cast<float>(timestep));
       mapper.apply_actuators(all_actuators);
+      if (fly_body) {
+        // Approximate the same bounded, world-vertical wing lift as the local
+        // AARNN controller. The force returns to zero when output holds expire.
+        const double altitude = fly_body->getPosition()[2];
+        double vertical_speed = 0.0;
+        if (std::isfinite(altitude)) {
+          if (fly_altitude_initialized)
+            vertical_speed = std::clamp(
+                (altitude - previous_fly_altitude) / (timestep * 0.001), -3.0, 3.0);
+          previous_fly_altitude = altitude;
+          fly_altitude_initialized = true;
+        }
+        const double requested_force = std::clamp(
+            0.014 * 9.81 + 0.45 * (0.32 - (std::isfinite(altitude) ? altitude : 0.0)) -
+                0.12 * vertical_speed,
+            0.0, 0.20);
+        const double target_force = fly_activity * requested_force;
+        fly_lift_force += std::clamp(target_force - fly_lift_force, -0.05, 0.05);
+        const double force[3] = {0.0, 0.0, fly_lift_force};
+        fly_body->addForce(force, false);
+      }
+      if (active_motors > 0 && now >= next_motor_status_log) {
+        std::cout << "[nm_api_robot] motor outputs applied robot=" << robot_name
+                  << " network=" << binding.network_id
+                  << " active_motors=" << active_motors << std::endl;
+        next_motor_status_log = now + std::chrono::seconds(30);
+      }
     }
   }
 

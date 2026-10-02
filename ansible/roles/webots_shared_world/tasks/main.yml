@@ -19,6 +19,35 @@
       - simulation_environment_webots_source_stat.stat.exists | default(false)
     fail_msg: "Set SIMULATION_ENVIRONMENT_SRC to the simulation_environment checkout or run this play from that repository."
 
+- name: Read the shared-world robot capability contract
+  delegate_to: localhost
+  become: false
+  ansible.builtin.slurp:
+    src: "{{ simulation_environment_webots_local_repo }}/webots_world/configs/robot_capabilities.json"
+  register: simulation_environment_webots_capability_contract_raw
+
+- name: Parse the shared-world robot capability profiles
+  ansible.builtin.set_fact:
+    simulation_environment_webots_capability_contract: >-
+      {{ simulation_environment_webots_capability_contract_raw.content | b64decode | from_json }}
+    simulation_environment_webots_capability_profiles: >-
+      {{ (simulation_environment_webots_capability_contract_raw.content | b64decode | from_json).profiles }}
+    simulation_environment_webots_capability_slots: >-
+      {{ (simulation_environment_webots_capability_contract_raw.content | b64decode | from_json).slots }}
+
+- name: Validate each configured network against a known robot profile
+  ansible.builtin.assert:
+    that:
+      - item.key in simulation_environment_webots_capability_slots.keys() | list
+      - item.value.robot_profile is defined
+      - item.value.robot_profile in simulation_environment_webots_capability_profiles.keys() | list
+      - item.value.robot_profile == simulation_environment_webots_capability_slots[item.key]
+    fail_msg: "Network {{ item.key }} needs a robot_profile present in webots_world/configs/robot_capabilities.json."
+  loop: "{{ simulation_environment_webots_network_bindings | dict2items }}"
+  when:
+    - item.value.network_id is defined
+    - item.value.network_id | string | trim | length > 0
+
 - name: Check the reused AARNN device mapper header on the control node
   delegate_to: localhost
   become: false
@@ -32,6 +61,21 @@
       - simulation_environment_webots_aarnn_header_stat.stat.exists | default(false)
     fail_msg: "The AARNN device mapper header was not found at {{ simulation_environment_webots_local_aarnn_header }}."
 
+- name: Check the reused AARNN simulated-muscle response headers
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_local_aarnn_include_root }}/{{ item }}"
+  loop: "{{ simulation_environment_webots_aarnn_response_headers }}"
+  register: simulation_environment_webots_response_header_stats
+
+- name: Require the AARNN simulated-muscle response headers
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists | default(false)
+    fail_msg: "The AARNN response header {{ item.item }} is required by the Webots API controller."
+  loop: "{{ simulation_environment_webots_response_header_stats.results }}"
+
 - name: Check the fleet hosts have the requested NVIDIA hardware
   ansible.builtin.command:
     argv:
@@ -40,6 +84,7 @@
       - --format=csv,noheader
   register: simulation_environment_webots_gpu
   changed_when: false
+  check_mode: false
 
 - name: Require an RTX 3060 with 12 GB VRAM on each Webots host
   ansible.builtin.assert:
@@ -98,6 +143,40 @@
     system: true
     create_home: true
 
+- name: Enable Ubuntu 24.04 compatibility packages on Ubuntu Resolute Webots hosts
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/aarnn-opencv-compat.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: http://archive.ubuntu.com/ubuntu
+      Suites: noble noble-updates
+      Components: main universe
+      Architectures: amd64
+      Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+      Types: deb
+      URIs: http://security.ubuntu.com/ubuntu
+      Suites: noble-security
+      Components: main universe
+      Architectures: amd64
+      Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+  when:
+    - ansible_facts['architecture'] in ['x86_64', 'amd64']
+    - ansible_facts['distribution_release'] == 'resolute'
+  register: simulation_environment_webots_noble_compat_source
+
+- name: Refresh APT after enabling Ubuntu 24.04 compatibility packages
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  when:
+    - ansible_facts['architecture'] in ['x86_64', 'amd64']
+    - ansible_facts['distribution_release'] == 'resolute'
+    - simulation_environment_webots_noble_compat_source.changed | default(false)
+
 - name: Install Webots runtime and controller build dependencies
   ansible.builtin.apt:
     name:
@@ -117,9 +196,45 @@
       - libxi6
       - libxtst6
       - libsndio7.0
+      - "{{ 'libgpgme11t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libgpgme11' }}"
+      - "{{ 'libopencv-videoio406t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libopencv-videoio406' }}"
     state: present
     update_cache: true
     cache_valid_time: 3600
+
+- name: Verify that the Webots hosts expose the required GPGME 1.1 ABI
+  ansible.builtin.command:
+    argv:
+      - ldconfig
+      - -p
+  check_mode: false
+  register: simulation_environment_webots_gpgme_cache
+  changed_when: false
+
+- name: Require libgpgme.so.11 on Webots hosts
+  ansible.builtin.assert:
+    that:
+      - "'libgpgme.so.11' in simulation_environment_webots_gpgme_cache.stdout"
+    fail_msg: "{{ inventory_hostname }} does not expose libgpgme.so.11 after the runtime package installation."
+
+- name: Verify that the OpenCV 4.6 video I/O runtime is installed
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - --show
+      - --showformat=${Status} ${Version}
+      - "{{ 'libopencv-videoio406t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libopencv-videoio406' }}"
+  check_mode: false
+  register: simulation_environment_webots_opencv_videoio
+  changed_when: false
+
+- name: Require the OpenCV 4.6 video I/O runtime on Webots hosts
+  ansible.builtin.assert:
+    that:
+      - simulation_environment_webots_opencv_videoio.stdout is search('install ok installed 4[.]6[.]0')
+    fail_msg: >-
+      {{ inventory_hostname }} does not have the OpenCV 4.6 video-I/O runtime
+      required by the Webots robot controller stack.
 
 - name: Create the Cyberbotics APT keyring directory
   ansible.builtin.file:
@@ -207,6 +322,7 @@
       - "--itemize-changes"
       - "--exclude=.git"
       - "--exclude=.idea"
+      - "--exclude=**/.secrets/***"
       - "--exclude=target"
       - "--exclude=webots_world/controllers/*/build"
       - "--exclude=webots_world/controllers/*/nm_api_robot_controller"
@@ -228,6 +344,16 @@
     owner: root
     group: root
     mode: "0644"
+  notify: Reload systemd and restart the shared Webots world
+
+- name: Install the reused AARNN simulated-muscle response headers
+  ansible.builtin.copy:
+    src: "{{ simulation_environment_webots_local_aarnn_include_root }}/{{ item }}"
+    dest: "{{ simulation_environment_webots_aarnn_header_path | dirname }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ simulation_environment_webots_aarnn_response_headers }}"
   notify: Reload systemd and restart the shared Webots world
 
 - name: Compile the AARNN robot controller and persistent ecology supervisor
@@ -280,7 +406,8 @@
     owner: "{{ simulation_environment_webots_service_user }}"
     group: "{{ simulation_environment_webots_service_user }}"
     mode: "0600"
-  notify: Reload systemd and restart the shared Webots world
+  # The robot controller reloads a rotated token on the next HTTP 401. Avoid
+  # restarting the live world solely because a service credential changed.
   when: simulation_environment_webots_access_token | trim | length > 0
 
 - name: Install the persistent Webots world start script
@@ -292,6 +419,14 @@
     mode: "0755"
   notify: Reload systemd and restart the shared Webots world
 
+- name: Install the saved-world viewpoint updater
+  ansible.builtin.copy:
+    src: preserve-runtime-viewpoint.sh
+    dest: /usr/local/sbin/nm-webots-preserve-runtime-viewpoint
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Configure the source world and stream port for the runtime launcher
   ansible.builtin.copy:
     dest: /etc/default/nm-webots-shared-world
@@ -301,7 +436,80 @@
     content: |
       NM_WEBOTS_SOURCE_WORLD_FILE={{ simulation_environment_webots_repo_path }}/webots_world/worlds/shared_fleet_neuroworld.wbt
       NM_WEBOTS_STREAM_PORT={{ simulation_environment_webots_port }}
+      NM_WEBOTS_BINDINGS_REVISION={{ simulation_environment_webots_network_bindings | dictsort | to_json | hash('sha256') }}
   notify: Reload systemd and restart the shared Webots world
+
+- name: Check for a saved world before applying a viewpoint-only deployment
+  ansible.builtin.stat:
+    path: "{{ simulation_environment_webots_state_world }}"
+  register: simulation_environment_webots_saved_world
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Require a saved world for the requested viewpoint-only deployment
+  ansible.builtin.assert:
+    that:
+      - simulation_environment_webots_saved_world.stat.exists | default(false)
+      - simulation_environment_webots_saved_world.stat.size | default(0) | int > 0
+    fail_msg: >-
+      The persistent Webots snapshot is missing on {{ inventory_hostname }};
+      refusing to restart it with runtime-viewpoint preservation enabled.
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Stop Webots cleanly before updating the saved camera viewpoint
+  ansible.builtin.systemd:
+    name: "{{ simulation_environment_webots_runtime_service }}"
+    state: stopped
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Copy only the new startup viewpoint into the saved world snapshot
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/nm-webots-preserve-runtime-viewpoint
+      - "{{ simulation_environment_webots_repo_path }}/webots_world/worlds/shared_fleet_neuroworld.wbt"
+      - "{{ simulation_environment_webots_state_world }}"
+  register: simulation_environment_webots_viewpoint_update
+  changed_when: true
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Calculate the new source revision for the preserved snapshot
+  ansible.builtin.command:
+    argv:
+      - "{{ simulation_environment_webots_runtime_script }}"
+      - --print-source-revision
+  environment:
+    NM_WEBOTS_RUNTIME_WORLD_FILE: "{{ simulation_environment_webots_state_world }}"
+    NM_WEBOTS_SOURCE_WORLD_FILE: "{{ simulation_environment_webots_repo_path }}/webots_world/worlds/shared_fleet_neuroworld.wbt"
+    NM_WEBOTS_BINDINGS_REVISION: "{{ simulation_environment_webots_network_bindings | dictsort | to_json | hash('sha256') }}"
+  register: simulation_environment_webots_preserved_world_revision
+  changed_when: false
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
+
+- name: Mark the saved world as compatible with the updated camera-only source
+  ansible.builtin.copy:
+    content: "{{ simulation_environment_webots_preserved_world_revision.stdout }}\n"
+    dest: "{{ simulation_environment_webots_state_world }}.source-revision"
+    owner: "{{ simulation_environment_webots_service_user }}"
+    group: "{{ simulation_environment_webots_service_user }}"
+    mode: "0640"
+  when:
+    - simulation_environment_webots_preserve_runtime_viewpoint | bool
+    - simulation_environment_webots_sync.changed | default(false)
+    - inventory_hostname == simulation_environment_webots_primary_host
 
 - name: Create the nftables include directory
   ansible.builtin.file:

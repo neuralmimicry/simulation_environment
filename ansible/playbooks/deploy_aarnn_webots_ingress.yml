@@ -1,0 +1,416 @@
+---
+- name: Deploy the scoped AARNN Webots sensory ingress
+  hosts: aarnn_control
+  become: true
+  vars_files:
+    - ../vars/neuralmimicry-site.yml
+  vars:
+    simulation_environment_webots_aarnn_orchestrator_patch:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: orchestrator
+                image: "{{ simulation_environment_webots_aarnn_orchestrator_image }}"
+                imagePullPolicy: Always
+                env:
+                  - name: NM_ORCHESTRATOR_BEARER_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: "{{ simulation_environment_webots_aarnn_bearer_secret }}"
+                        key: NM_ORCHESTRATOR_BEARER_TOKEN
+                  - name: NM_ORCHESTRATOR_STARTUP_IO_CONTRACT
+                    value: "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
+                  - name: NM_ORCHESTRATOR_STARTUP_IO_CONTRACT_NETWORK_IDS
+                    value: "{{ simulation_environment_webots_aarnn_startup_io_contract_network_ids | join(',') }}"
+                  - name: RAYON_NUM_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
+                  - name: TOKIO_WORKER_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
+                resources:
+                  requests:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_request }}"
+                  limits:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_limit }}"
+    simulation_environment_webots_aarnn_orchestrator_memory_patch:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: orchestrator
+                env:
+                  - name: RAYON_NUM_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
+                  - name: TOKIO_WORKER_THREADS
+                    value: "{{ simulation_environment_webots_aarnn_orchestrator_threads | string }}"
+                resources:
+                  requests:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_request }}"
+                  limits:
+                    memory: "{{ simulation_environment_webots_aarnn_orchestrator_memory_limit }}"
+    simulation_environment_webots_aarnn_web_ui_patch:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: web-ui
+                image: "{{ simulation_environment_webots_aarnn_web_ui_image }}"
+                imagePullPolicy: Always
+                env:
+                  - name: NM_ORCHESTRATOR_BEARER_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: "{{ simulation_environment_webots_aarnn_bearer_secret }}"
+                        key: NM_ORCHESTRATOR_BEARER_TOKEN
+                  - name: NM_PERIPHERAL_INPUT_GRANTS_JSON
+                    value: "{{ simulation_environment_webots_peripheral_input_grants | to_json }}"
+                  - name: NM_SIMULATION_INGRESS_PRINCIPALS
+                    value: "{{ simulation_environment_webots_simulation_ingress_principals | join(',') }}"
+                  - name: AARNN_CENTRAL_AUTH_TIMEOUT_SECS
+                    value: "10"
+    simulation_environment_webots_aarnn_engine_patch:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: engine
+                image: "{{ simulation_environment_webots_aarnn_engine_image }}"
+                imagePullPolicy: Always
+  tasks:
+    - name: Check the AARNN grant scopes match configured Webots networks
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_peripheral_input_grants is sequence
+          - simulation_environment_webots_peripheral_input_grants is not string
+          - simulation_environment_webots_peripheral_input_grants | length > 0
+          - >-
+            (
+              simulation_environment_webots_peripheral_input_grants
+              | map(attribute='brain_id')
+              | map('string')
+              | map('trim')
+              | list
+              | difference(
+                  simulation_environment_webots_network_bindings
+                  | dict2items
+                  | selectattr('value.network_id', 'defined')
+                  | map(attribute='value.network_id')
+                  | map('string')
+                  | map('trim')
+                  | reject('equalto', '')
+                  | list
+                )
+              | length
+            ) == 0
+        fail_msg: "AARNN peripheral-input grants must target configured Webots network IDs only."
+      tags: [webots_ingress_config]
+
+    - name: Check each managed simulation identity has an exact network input grant
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_simulation_ingress_principals is sequence
+          - simulation_environment_webots_simulation_ingress_principals is not string
+          - simulation_environment_webots_simulation_ingress_principals | length > 0
+          - >-
+            (
+              simulation_environment_webots_simulation_ingress_principals
+              | difference(
+                  simulation_environment_webots_peripheral_input_grants
+                  | map(attribute='principal')
+                  | unique
+                  | list
+                )
+              | length
+            ) == 0
+        fail_msg: "Managed simulation principals must have an exact configured PeripheralInput grant."
+      tags: [webots_ingress_config]
+
+    - name: Check no PeripheralInput grant exceeds the simulation ingress allow-list
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              simulation_environment_webots_peripheral_input_grants
+              | map(attribute='principal')
+              | map('string')
+              | difference(simulation_environment_webots_simulation_ingress_principals)
+              | length
+            ) == 0
+        fail_msg: "PeripheralInput grants must be limited to simulation ingress principals."
+      tags: [webots_ingress_config]
+
+    - name: Check every managed simulation identity is granted each embodied network
+      ansible.builtin.assert:
+        that:
+          - >-
+            simulation_environment_webots_peripheral_input_grants
+            | selectattr('principal', 'equalto', item.0)
+            | selectattr('brain_id', 'equalto', item.1)
+            | list
+            | length > 0
+        fail_msg: "Simulation identity {{ item.0 }} lacks a brain-scoped PeripheralInput grant for {{ item.1 }}."
+      loop: >-
+        {{
+          simulation_environment_webots_simulation_ingress_principals
+          | product(
+              simulation_environment_webots_network_bindings
+              | dict2items
+              | selectattr('value.network_id', 'defined')
+              | map(attribute='value.network_id')
+              | map('string')
+              | map('trim')
+              | reject('equalto', '')
+              | unique
+              | list
+            )
+          | list
+        }}
+      tags: [webots_ingress_config]
+
+    - name: Require the startup I/O contract to use the mounted AARNN config
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_aarnn_startup_io_contract_path is string
+          - simulation_environment_webots_aarnn_startup_io_contract_path.startswith('/etc/aarnn/startup/')
+          - simulation_environment_webots_aarnn_startup_io_contract_path.endswith('.json')
+        fail_msg: "The orchestrator startup I/O contract must point to a mounted AARNN startup JSON config."
+      tags: [webots_ingress_config]
+
+    - name: Require the startup I/O contract IDs to match embodied Webots networks
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_aarnn_startup_io_contract_network_ids is sequence
+          - simulation_environment_webots_aarnn_startup_io_contract_network_ids is not string
+          - simulation_environment_webots_aarnn_startup_io_contract_network_ids | length > 0
+          - >-
+            (
+              simulation_environment_webots_aarnn_startup_io_contract_network_ids
+              | difference(
+                  simulation_environment_webots_network_bindings
+                  | dict2items
+                  | selectattr('value.network_id', 'defined')
+                  | map(attribute='value.network_id')
+                  | map('string')
+                  | map('trim')
+                  | reject('equalto', '')
+                  | list
+                )
+              | length
+            ) == 0
+        fail_msg: "Startup I/O contracts may target only the networks represented in the shared Webots world."
+      tags: [webots_ingress_config]
+
+    - name: Require the Webots orchestrator memory request below its bounded limit
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_webots_aarnn_orchestrator_memory_request is match('^[1-9][0-9]*Gi$')
+          - simulation_environment_webots_aarnn_orchestrator_memory_limit is match('^[1-9][0-9]*Gi$')
+          - >-
+            (simulation_environment_webots_aarnn_orchestrator_memory_request | regex_replace('Gi$', '') | int)
+            < (simulation_environment_webots_aarnn_orchestrator_memory_limit | regex_replace('Gi$', '') | int)
+          - simulation_environment_webots_aarnn_orchestrator_threads | int > 0
+          - simulation_environment_webots_aarnn_orchestrator_threads | int <= 3
+        fail_msg: >-
+          The Webots-backed AARNN orchestrator must request less memory than its configured limit,
+          and its thread pools must fit within the 3-CPU container limit.
+      tags: [webots_ingress_config, orchestrator_memory]
+
+    - name: Apply the Webots shared-SNN orchestrator memory headroom before image rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --type=strategic
+          - --patch
+          - "{{ simulation_environment_webots_aarnn_orchestrator_memory_patch | to_json }}"
+      register: simulation_environment_webots_aarnn_orchestrator_memory_patch_result
+      changed_when: >-
+        not simulation_environment_webots_aarnn_orchestrator_memory_patch_result.stdout.endswith('not patched')
+      tags: [orchestrator_memory]
+
+    - name: Wait for the shared-SNN orchestrator memory rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --timeout=10m
+      changed_when: false
+      tags: [orchestrator_memory]
+
+    - name: Verify the orchestrator I/O contract is readable before patching
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - exec
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --
+          - test
+          - -r
+          - "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
+      changed_when: false
+      tags: [webots_orchestrator_rollout]
+
+    - name: Create the protected AARNN bearer-token directory
+      ansible.builtin.file:
+        path: "{{ simulation_environment_webots_aarnn_bearer_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Check for the persistent Webots-to-orchestrator bearer token
+      ansible.builtin.stat:
+        path: "{{ simulation_environment_webots_aarnn_bearer_file }}"
+      register: simulation_environment_webots_aarnn_bearer_stat
+
+    - name: Generate an internal bearer token when none exists
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - rand
+          - -hex
+          - "32"
+      register: simulation_environment_webots_aarnn_generated_bearer
+      changed_when: true
+      no_log: true
+      when: not simulation_environment_webots_aarnn_bearer_stat.stat.exists
+
+    - name: Store the internal bearer token with root-only permissions
+      ansible.builtin.copy:
+        content: "{{ simulation_environment_webots_aarnn_generated_bearer.stdout }}\n"
+        dest: "{{ simulation_environment_webots_aarnn_bearer_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when: not simulation_environment_webots_aarnn_bearer_stat.stat.exists
+
+    - name: Render the bearer token as a protected Kubernetes Secret
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - create
+          - secret
+          - generic
+          - "{{ simulation_environment_webots_aarnn_bearer_secret }}"
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - "--from-file=NM_ORCHESTRATOR_BEARER_TOKEN={{ simulation_environment_webots_aarnn_bearer_file }}"
+          - --dry-run=client
+          - --output=yaml
+      register: simulation_environment_webots_aarnn_bearer_secret_manifest
+      changed_when: false
+      no_log: true
+
+    - name: Apply the protected Kubernetes Secret
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - apply
+          - --filename=-
+        stdin: "{{ simulation_environment_webots_aarnn_bearer_secret_manifest.stdout }}"
+      register: simulation_environment_webots_aarnn_bearer_secret_apply
+      changed_when: >-
+        'created' in simulation_environment_webots_aarnn_bearer_secret_apply.stdout
+        or 'configured' in simulation_environment_webots_aarnn_bearer_secret_apply.stdout
+      no_log: true
+
+    - name: Roll only the AARNN orchestrator to the Webots ingress image
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --type=strategic
+          - --patch
+          - "{{ simulation_environment_webots_aarnn_orchestrator_patch | to_json }}"
+      register: simulation_environment_webots_aarnn_orchestrator_patch_result
+      changed_when: "not simulation_environment_webots_aarnn_orchestrator_patch_result.stdout.endswith('not patched')"
+      tags: [webots_orchestrator_rollout]
+
+    - name: Roll only the AARNN Web UI with its scoped Webots grants
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - deployment/aarnn-web-ui
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --type=strategic
+          - --patch
+          - "{{ simulation_environment_webots_aarnn_web_ui_patch | to_json }}"
+      register: simulation_environment_webots_aarnn_web_ui_patch_result
+      changed_when: "not simulation_environment_webots_aarnn_web_ui_patch_result.stdout.endswith('not patched')"
+
+    - name: Upgrade AARNN engine workers to the Webots Prepare/Commit RPC server
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - daemonset/aarnn-engine
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --type=strategic
+          - --patch
+          - "{{ simulation_environment_webots_aarnn_engine_patch | to_json }}"
+      register: simulation_environment_webots_aarnn_engine_patch_result
+      changed_when: "not simulation_environment_webots_aarnn_engine_patch_result.stdout.endswith('not patched')"
+
+    - name: Wait for the AARNN orchestrator rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/aarnn-orchestrator
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --timeout=10m
+      changed_when: false
+      tags: [webots_orchestrator_rollout]
+
+    - name: Wait for the AARNN Web UI rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/aarnn-web-ui
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --timeout=10m
+      changed_when: false
+
+    - name: Wait for the AARNN engine DaemonSet rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - daemonset/aarnn-engine
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - --timeout=10m
+      changed_when: false

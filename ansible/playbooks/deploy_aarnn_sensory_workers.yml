@@ -1,0 +1,700 @@
+---
+- name: Confirm the shared-SNN recovery snapshot exists before rolling workers
+  hosts: aarnn_control
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
+    - ../vars/neuralmimicry-site.yml
+  tasks:
+    - name: Check that a nonempty shared-SNN snapshot is available in the AARNN workspace
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/rancher/k3s/k3s.yaml
+          - --namespace
+          - aarnn
+          - exec
+          - deployment/aarnn-web-ui
+          - --
+          - test
+          - -s
+          - /var/lib/aarnn/runtime/users/system/workspaces/neuralmimicry-shared-snn/latest.snapshot.json
+      register: simulation_environment_shared_snn_snapshot_check
+      changed_when: false
+      failed_when: simulation_environment_shared_snn_snapshot_check.rc != 0
+
+    - name: Read the canonical shared-SNN startup I/O contract
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/rancher/k3s/k3s.yaml
+          - --namespace
+          - "{{ simulation_environment_webots_aarnn_namespace }}"
+          - exec
+          - deployment/aarnn-orchestrator
+          - --
+          - cat
+          - "{{ simulation_environment_webots_aarnn_startup_io_contract_path }}"
+      register: simulation_environment_aarnn_shared_snn_io_contract
+      changed_when: false
+
+    - name: Require the canonical worker contract to match the embodied SNN dimensions
+      ansible.builtin.assert:
+        that:
+          - >-
+            (simulation_environment_aarnn_shared_snn_io_contract.stdout | from_json).num_sensory_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_sensory | int
+          - >-
+            (simulation_environment_aarnn_shared_snn_io_contract.stdout | from_json).num_output_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_outputs | int
+        fail_msg: >-
+          The control-plane startup contract does not match the shared Webots embodiment;
+          no worker restart will begin.
+
+- name: Resolve the live shared-SNN placement before choosing worker rollout order
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
+    - ../vars/neuralmimicry-site.yml
+  tags: [shared_snn_placement_preflight]
+  tasks:
+    - name: Read active shared-SNN owners and sensory ingress owner
+      ansible.builtin.shell: |
+        set -eu
+        header_file="$(mktemp)"
+        trap 'rm -f "$header_file"' EXIT
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
+        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
+          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+          | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
+              [.networks[] | select(.network_id == $network_id)] as $matches
+              | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
+                else
+                  ($matches[0].distribution // []) as $distribution
+                  | {
+                      playing: $matches[0].playing,
+                      total_neurons: $matches[0].total_neurons,
+                      active_node_ids: ($distribution | map(.node_id) | unique | sort),
+                      sensory_ingress_node_ids: (
+                        $distribution
+                        | map(select((.layers // []) | index(0)) | .node_id)
+                        | unique
+                        | sort
+                      )
+                    }
+                end
+              '
+      args:
+        executable: /bin/bash
+      register: simulation_environment_shared_snn_placement
+      changed_when: false
+      check_mode: false
+      until: simulation_environment_shared_snn_placement.rc == 0
+      retries: 30
+      delay: 2
+      no_log: true
+      tags: [rollout_order_preflight]
+
+    - name: Convert live AARNN node IDs into worker inventory names
+      ansible.builtin.set_fact:
+        simulation_environment_shared_snn_active_worker_hosts: >-
+          {{ (simulation_environment_shared_snn_placement.stdout | from_json).active_node_ids
+             | select('match', '^native-')
+             | map('regex_replace', '^native-', '') | list }}
+        simulation_environment_shared_snn_ingress_worker_hosts: >-
+          {{ (simulation_environment_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids
+             | select('match', '^native-')
+             | map('regex_replace', '^native-', '') | list }}
+        simulation_environment_shared_snn_external_node_ids: >-
+          {{ (simulation_environment_shared_snn_placement.stdout | from_json).active_node_ids
+             | reject('match', '^native-') | list }}
+        simulation_environment_shared_snn_external_ingress_node_ids: >-
+          {{ (simulation_environment_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids
+             | reject('match', '^native-') | list }}
+      tags: [rollout_order_preflight]
+
+    - name: Build the safe rollout order from the live network placement
+      ansible.builtin.set_fact:
+        simulation_environment_aarnn_worker_rollout_order: >-
+          {{ (groups['aarnn_sensory_workers']
+              | reject('in', simulation_environment_shared_snn_active_worker_hosts)
+              | list)
+             + (groups['aarnn_sensory_workers']
+                | select('in', simulation_environment_shared_snn_active_worker_hosts)
+                | reject('in', simulation_environment_shared_snn_ingress_worker_hosts)
+                | list)
+             + simulation_environment_shared_snn_ingress_worker_hosts }}
+      tags: [rollout_order_preflight]
+
+    - name: Refuse a worker rollout unless it preserves the active shared-SNN ingress owner
+      ansible.builtin.assert:
+        that:
+          - (simulation_environment_shared_snn_placement.stdout | from_json).playing | bool
+          - (simulation_environment_shared_snn_placement.stdout | from_json).total_neurons | int > 0
+          - (simulation_environment_shared_snn_placement.stdout | from_json).active_node_ids | length >= 2
+          - simulation_environment_shared_snn_active_worker_hosts | length >= 1
+          - (simulation_environment_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids | length == 1
+          - simulation_environment_shared_snn_ingress_worker_hosts | length <= 1
+          - simulation_environment_shared_snn_external_ingress_node_ids | length + simulation_environment_shared_snn_ingress_worker_hosts | length == 1
+          - simulation_environment_shared_snn_ingress_worker_hosts | difference(simulation_environment_shared_snn_active_worker_hosts) | length == 0
+          - simulation_environment_shared_snn_active_worker_hosts | difference(groups['aarnn_sensory_workers']) | length == 0
+          - simulation_environment_aarnn_worker_rollout_order | length == groups['aarnn_sensory_workers'] | length
+          - simulation_environment_aarnn_worker_rollout_order | unique | length == groups['aarnn_sensory_workers'] | length
+          - groups['aarnn_sensory_workers'] | difference(simulation_environment_aarnn_worker_rollout_order) | length == 0
+        fail_msg: >-
+          The live shared-SNN placement cannot be converted into a safe ordered worker rollout.
+          Active workers={{ simulation_environment_shared_snn_active_worker_hosts | default([]) }};
+          active external nodes={{ simulation_environment_shared_snn_external_node_ids | default([]) }};
+          sensory ingress owners={{ simulation_environment_shared_snn_ingress_worker_hosts | default([]) }};
+          external sensory ingress owners={{ simulation_environment_shared_snn_external_ingress_node_ids | default([]) }};
+          required rollout={{ simulation_environment_aarnn_worker_rollout_order | default([]) }}.
+          The rollout can proceed only when every active worker is in the managed inventory and
+          exactly one managed or external sensory ingress owner is known. External source nodes
+          are reported for visibility and remain untouched by this native-worker rollout.
+      run_once: true
+      tags: [rollout_order_preflight]
+
+    - name: Add workers to a temporary group in the live safe rollout order
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: aarnn_sensory_workers_rollout
+      loop: "{{ simulation_environment_aarnn_worker_rollout_order }}"
+      changed_when: false
+      run_once: true
+      tags: [rollout_order_preflight]
+
+- name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
+  # qc00 is offline and qc05 has no active native worker service. qc01's engine
+  # DaemonSet is updated with the ingress images instead of this native play.
+  # The preceding play builds this group from live placement, putting the
+  # current managed layer-0 ingress owner last immediately before the rollout.
+  hosts: aarnn_sensory_workers_rollout
+  order: inventory
+  become: true
+  serial: 1
+  gather_facts: false
+  vars_files:
+    - ../roles/webots_shared_world/defaults/main.yml
+    - ../vars/neuralmimicry-site.yml
+  vars:
+    simulation_environment_aarnn_node_binary_source_x86_64: "{{ lookup('env', 'AARNN_NODE_BINARY_X86_64') | default('', true) }}"
+    simulation_environment_aarnn_node_binary_source_aarch64: "{{ lookup('env', 'AARNN_NODE_BINARY_AARCH64') | default('', true) }}"
+    simulation_environment_aarnn_node_binary_path: /usr/bin/aarnn_rust
+    simulation_environment_aarnn_node_service: aarnn-node.service
+    simulation_environment_aarnn_node_port: 50051
+    simulation_environment_aarnn_node_id: "native-{{ inventory_hostname }}"
+  pre_tasks:
+    - name: Gather worker facts for package and architecture selection
+      ansible.builtin.setup:
+      tags: [worker_install]
+
+    - name: Verify the worker play uses the live safe rollout order
+      ansible.builtin.assert:
+        that:
+          - >-
+            ansible_play_hosts_all == (
+              hostvars['localhost'].simulation_environment_aarnn_worker_rollout_order
+              | select('in', ansible_play_hosts_all)
+              | list
+            )
+          - >-
+            hostvars['localhost'].simulation_environment_shared_snn_ingress_worker_hosts | length == 0
+            or hostvars['localhost'].simulation_environment_shared_snn_ingress_worker_hosts[0]
+               not in ansible_play_hosts_all
+            or ansible_play_hosts_all[-1]
+               == hostvars['localhost'].simulation_environment_shared_snn_ingress_worker_hosts[0]
+        fail_msg: >-
+          The active shared-SNN ingress owner is not last in this play's execution order;
+          no native worker has been changed.
+      run_once: true
+      tags: [rollout_order_preflight]
+
+    - name: Recheck the shared-SNN ingress owner before this serial worker update
+      ansible.builtin.shell: |
+        set -eu
+        header_file="$(mktemp)"
+        trap 'rm -f "$header_file"' EXIT
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
+        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
+          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+          | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
+              [.networks[] | select(.network_id == $network_id)] as $matches
+              | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
+                else
+                  ($matches[0].distribution // []) as $distribution
+                  | {
+                      playing: $matches[0].playing,
+                      total_neurons: $matches[0].total_neurons,
+                      sensory_ingress_node_ids: (
+                        $distribution
+                        | map(select((.layers // []) | index(0)) | .node_id)
+                        | unique
+                        | sort
+                      )
+                    }
+                end
+              '
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      register: simulation_environment_aarnn_current_shared_snn_placement
+      changed_when: false
+      check_mode: false
+      until: simulation_environment_aarnn_current_shared_snn_placement.rc == 0
+      retries: 30
+      delay: 2
+      no_log: true
+      tags: [rollout_order_preflight]
+
+    - name: Require the live sensory ingress owner to remain after this worker in the rollout
+      ansible.builtin.assert:
+        that:
+          - (simulation_environment_aarnn_current_shared_snn_placement.stdout | from_json).playing | bool
+          - (simulation_environment_aarnn_current_shared_snn_placement.stdout | from_json).total_neurons | int > 0
+          - (simulation_environment_aarnn_current_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids | length == 1
+          - >-
+            (
+              (simulation_environment_aarnn_current_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids[0]
+              is not match('^native-')
+            )
+            or
+            (
+              (simulation_environment_aarnn_current_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids[0]
+              | regex_replace('^native-', '')
+            ) not in ansible_play_hosts_all[
+              ansible_play_hosts_all.index(inventory_hostname):
+            ]
+            or
+            ansible_play_hosts_all[-1]
+            ==
+            (
+              (simulation_environment_aarnn_current_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids[0]
+              | regex_replace('^native-', '')
+            )
+        fail_msg: >-
+          The live shared-SNN sensory ingress owner moved ahead of this serial worker update.
+            No change was made to {{ inventory_hostname }}; rerun after placement settles to
+            derive a new safe worker order from current AARNN status.
+      tags: [rollout_order_preflight]
+
+    - name: Require release binaries for both active worker architectures
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_node_binary_source_x86_64 | length > 0
+          - simulation_environment_aarnn_node_binary_source_aarch64 | length > 0
+        fail_msg: >-
+          Set AARNN_NODE_BINARY_X86_64 and AARNN_NODE_BINARY_AARCH64 to release
+          aarnn_rust executables built from codex/webots-api-ingress-20260929.
+      run_once: true
+
+    - name: Inspect the local x86-64 worker binary
+      ansible.builtin.stat:
+        path: "{{ simulation_environment_aarnn_node_binary_source_x86_64 }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_stat_x86_64
+
+    - name: Inspect the local AArch64 worker binary
+      ansible.builtin.stat:
+        path: "{{ simulation_environment_aarnn_node_binary_source_aarch64 }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_stat_aarch64
+
+    - name: Require both local worker binaries to be regular files
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_node_binary_stat_x86_64.stat.exists
+          - simulation_environment_aarnn_node_binary_stat_x86_64.stat.isreg
+          - simulation_environment_aarnn_node_binary_stat_aarch64.stat.exists
+          - simulation_environment_aarnn_node_binary_stat_aarch64.stat.isreg
+        fail_msg: "Both architecture-specific worker binary paths must exist as regular files."
+      run_once: true
+
+    - name: Verify the x86-64 release binary architecture
+      ansible.builtin.command:
+        argv:
+          - file
+          - --brief
+          - "{{ simulation_environment_aarnn_node_binary_source_x86_64 }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_type_x86_64
+      changed_when: false
+
+    - name: Verify the AArch64 release binary architecture
+      ansible.builtin.command:
+        argv:
+          - file
+          - --brief
+          - "{{ simulation_environment_aarnn_node_binary_source_aarch64 }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: simulation_environment_aarnn_node_binary_type_aarch64
+      changed_when: false
+
+    - name: Require both release binaries to match their declared architectures
+      ansible.builtin.assert:
+        that:
+          - "'x86-64' in simulation_environment_aarnn_node_binary_type_x86_64.stdout"
+          - "'aarch64' in simulation_environment_aarnn_node_binary_type_aarch64.stdout"
+        fail_msg: >-
+          The Webots sensory workers require one x86-64 artifact for sm00/sm01
+          and one AArch64 artifact for qc02-qc04.
+      run_once: true
+
+    - name: Require a supported native worker architecture
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+        fail_msg: "No AARNN sensory worker binary is configured for this host architecture."
+
+    - name: Select the worker binary matching this host architecture
+      ansible.builtin.set_fact:
+        simulation_environment_aarnn_node_binary_source: >-
+          {{ simulation_environment_aarnn_node_binary_source_aarch64
+             if ansible_facts['architecture'] == 'aarch64'
+             else simulation_environment_aarnn_node_binary_source_x86_64 }}
+
+    - name: Enable Ubuntu 24.04 compatibility packages for x86-64 AARNN workers
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/aarnn-opencv-compat.sources
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: http://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: http://security.ubuntu.com/ubuntu
+          Suites: noble-security
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+      when:
+        - ansible_facts['architecture'] == 'x86_64'
+        - ansible_facts['distribution_release'] == 'resolute'
+      register: simulation_environment_aarnn_opencv_compat_source
+
+    - name: Refresh APT after enabling Ubuntu 24.04 compatibility packages
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+      when:
+        - ansible_facts['architecture'] == 'x86_64'
+        - ansible_facts['distribution_release'] == 'resolute'
+        - simulation_environment_aarnn_opencv_compat_source.changed | default(false)
+
+    - name: Install OpenCV 4.6 video I/O runtime for x86-64 workers
+      ansible.builtin.apt:
+        name: libopencv-videoio406t64
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['architecture'] == 'x86_64'
+
+    - name: Install GPGME 1.1 ABI runtime for x86-64 workers
+      ansible.builtin.apt:
+        name: "{{ 'libgpgme11t64' if ansible_facts['distribution_release'] in ['noble', 'resolute'] else 'libgpgme11' }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['architecture'] == 'x86_64'
+
+    - name: Verify the GPGME 1.1 ABI is available to x86-64 workers
+      ansible.builtin.command:
+        argv:
+          - ldconfig
+          - -p
+      register: simulation_environment_aarnn_gpgme_library_cache
+      changed_when: false
+      when: ansible_facts['architecture'] == 'x86_64'
+
+    - name: Require libgpgme.so.11 for x86-64 AARNN workers
+      ansible.builtin.assert:
+        that:
+          - "'libgpgme.so.11' in simulation_environment_aarnn_gpgme_library_cache.stdout"
+        fail_msg: "{{ inventory_hostname }} does not expose libgpgme.so.11 required by its x86-64 AARNN worker."
+      when: ansible_facts['architecture'] == 'x86_64'
+
+    - name: Verify the OpenCV 4.6 video I/O runtime is installed
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - --show
+          - --showformat=${Status} ${Version}
+          - libopencv-videoio406t64
+      register: simulation_environment_aarnn_opencv_videoio
+      changed_when: false
+      when: ansible_facts['architecture'] == 'x86_64'
+
+    - name: Require the OpenCV 4.6 video I/O package status
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_opencv_videoio.stdout is search('install ok installed 4[.]6[.]0')
+        fail_msg: "{{ inventory_hostname }} does not have the OpenCV 4.6 video I/O runtime required by the x86-64 worker binary."
+      when: ansible_facts['architecture'] == 'x86_64'
+
+  tasks:
+    - name: Require the native worker service to be active before replacement
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ simulation_environment_aarnn_node_service }}"
+      register: simulation_environment_aarnn_node_active
+      changed_when: false
+      failed_when: simulation_environment_aarnn_node_active.stdout != "active"
+
+    - name: Stage the candidate worker binary for a remote load check
+      ansible.builtin.copy:
+        src: "{{ simulation_environment_aarnn_node_binary_source }}"
+        dest: /tmp/aarnn_rust.webots-ingress
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Check that the candidate worker binary starts and exposes its CLI
+      ansible.builtin.command:
+        argv:
+          - /tmp/aarnn_rust.webots-ingress
+          - --help
+      register: simulation_environment_aarnn_node_help
+      changed_when: false
+
+    - name: Require node mode in the candidate worker binary
+      ansible.builtin.assert:
+        that:
+          - "'--node' in simulation_environment_aarnn_node_help.stdout"
+        fail_msg: "The candidate binary does not expose the native AARNN node mode."
+
+    - name: Require the candidate Prepare/Commit sensory RPC implementation
+      ansible.builtin.command:
+        argv:
+          - grep
+          - --binary-files=text
+          - --quiet
+          - prepare_sensory_input
+          - /tmp/aarnn_rust.webots-ingress
+      changed_when: false
+
+    - name: Create a root-owned rollback directory
+      ansible.builtin.file:
+        path: /usr/local/lib/neuralmimicry/rollback
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Preserve the currently installed worker binary
+      ansible.builtin.copy:
+        src: "{{ simulation_environment_aarnn_node_binary_path }}"
+        dest: >-
+          /usr/local/lib/neuralmimicry/rollback/aarnn_rust.{{ ansible_facts['date_time']['iso8601_basic_short'] }}
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+        force: false
+
+    - name: Capture the worker restart timestamp for the rejoin check
+      ansible.builtin.command:
+        argv:
+          - date
+          - --utc
+          - --iso-8601=seconds
+      register: simulation_environment_aarnn_node_restart_started
+      changed_when: false
+
+    - name: Ensure the shared-SNN worker config directory exists
+      ansible.builtin.file:
+        path: "{{ simulation_environment_aarnn_node_io_config_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure the AARNN worker service drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ simulation_environment_aarnn_node_service_dropin | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the canonical shared-SNN startup I/O config for this worker
+      ansible.builtin.copy:
+        content: "{{ hostvars['spirit'].simulation_environment_aarnn_shared_snn_io_contract.stdout }}\n"
+        dest: "{{ simulation_environment_aarnn_node_io_config_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: simulation_environment_aarnn_node_io_config_install
+      notify: Restart the AARNN native worker
+
+    - name: Install the shared-SNN worker service config override
+      ansible.builtin.template:
+        src: ../roles/webots_shared_world/templates/aarnn-node-shared-snn.service.conf.j2
+        dest: "{{ simulation_environment_aarnn_node_service_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: simulation_environment_aarnn_node_service_override
+      notify: Restart the AARNN native worker
+
+    - name: Install the Webots-capable worker binary
+      ansible.builtin.copy:
+        src: /tmp/aarnn_rust.webots-ingress
+        dest: "{{ simulation_environment_aarnn_node_binary_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      register: simulation_environment_aarnn_node_binary_install
+      notify: Restart the AARNN native worker
+
+    - name: Record whether the worker requires a restart
+      ansible.builtin.set_fact:
+        simulation_environment_aarnn_node_restart_required: >-
+          {{ simulation_environment_aarnn_node_binary_install.changed
+             or simulation_environment_aarnn_node_io_config_install.changed
+             or simulation_environment_aarnn_node_service_override.changed }}
+
+    - name: Remove the staged worker binary
+      ansible.builtin.file:
+        path: /tmp/aarnn_rust.webots-ingress
+        state: absent
+
+    - name: Apply the worker update before rolling to the next host
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for the native worker gRPC port to return
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ simulation_environment_aarnn_node_port }}"
+        state: started
+        delay: 2
+        timeout: 90
+
+    - name: Confirm the native worker service remains active
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ simulation_environment_aarnn_node_service }}"
+      changed_when: false
+      register: simulation_environment_aarnn_node_after
+      failed_when: simulation_environment_aarnn_node_after.stdout != "active"
+
+    - name: Read the installed shared-SNN worker I/O config
+      ansible.builtin.command:
+        argv:
+          - cat
+          - "{{ simulation_environment_aarnn_node_io_config_path }}"
+      register: simulation_environment_aarnn_node_installed_io_config
+      changed_when: false
+
+    - name: Require the worker startup I/O dimensions to match the shared embodiment
+      ansible.builtin.assert:
+        that:
+          - >-
+            (simulation_environment_aarnn_node_installed_io_config.stdout | from_json).num_sensory_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_sensory | int
+          - >-
+            (simulation_environment_aarnn_node_installed_io_config.stdout | from_json).num_output_neurons | int
+            == simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].expected_outputs | int
+
+    - name: Confirm the worker service uses the shared-SNN I/O config
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - --property=ExecStart
+          - --value
+          - "{{ simulation_environment_aarnn_node_service }}"
+      register: simulation_environment_aarnn_node_exec_start
+      changed_when: false
+
+    - name: Require the worker service to load the shared-SNN I/O config
+      ansible.builtin.assert:
+        that:
+          - simulation_environment_aarnn_node_io_config_path in simulation_environment_aarnn_node_exec_start.stdout
+
+    - name: Wait for this worker to rejoin the AARNN orchestrator
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - --unit
+          - "{{ simulation_environment_aarnn_node_service }}"
+          - --since
+          - "{{ simulation_environment_aarnn_node_restart_started.stdout }}"
+          - --no-pager
+          - --output=cat
+          - --grep
+          - "Successfully joined orchestrator at"
+      register: simulation_environment_aarnn_node_rejoin
+      changed_when: false
+      when: simulation_environment_aarnn_node_restart_required | bool
+      until: >-
+        simulation_environment_aarnn_node_rejoin.stdout is search(
+          'Successfully joined orchestrator at')
+      retries: 45
+      delay: 2
+
+    - name: Confirm the shared SNN is still active before proceeding to the next worker
+      ansible.builtin.shell: |
+        set -eu
+        header_file="$(mktemp)"
+        trap 'rm -f "$header_file"' EXIT
+        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
+        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
+          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+          | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
+              [.networks[] | select(.network_id == $network_id)] as $matches
+              | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
+                elif ($matches[0].playing != true
+                      or ($matches[0].total_neurons // 0) < 1
+                      or (($matches[0].distribution // []) | length) < 1)
+                  then error("shared-SNN is not running after worker restart")
+                else
+                  {
+                    network_id: $matches[0].network_id,
+                    playing: $matches[0].playing,
+                    current_dt: $matches[0].current_dt,
+                    total_neurons: $matches[0].total_neurons,
+                    active_nodes: ($matches[0].distribution | map(.node_id) | unique | sort)
+                  }
+                end
+              '
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      register: simulation_environment_shared_snn_post_restart_status
+      changed_when: false
+      until: simulation_environment_shared_snn_post_restart_status.rc == 0
+      retries: 30
+      delay: 2
+      no_log: true
+
+  handlers:
+    - name: Restart the AARNN native worker
+      ansible.builtin.systemd:
+        name: "{{ simulation_environment_aarnn_node_service }}"
+        state: restarted
+        daemon_reload: true

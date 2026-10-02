@@ -1,6 +1,8 @@
 #include <webots/Field.hpp>
 #include <webots/Node.hpp>
 #include <webots/Supervisor.hpp>
+#include <nlohmann/json.hpp>
+#include "habitat_policy.hpp"
 
 #include <array>
 #include <chrono>
@@ -11,10 +13,18 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 using webots::Field;
 using webots::Node;
 using webots::Supervisor;
+using nlohmann::json;
+using nm_webots::Bounds3d;
+using nm_webots::Mobility;
+using nm_webots::Position;
+
+using RobotMobility = std::unordered_map<std::string, Mobility>;
 
 namespace {
 constexpr double kTau = 6.28318530717958647692;
@@ -43,6 +53,105 @@ constexpr std::array<Npc, 6> kNpcs{{
 std::string env_or(const char *key, const char *fallback) {
   const char *value = std::getenv(key);
   return value && *value ? value : fallback;
+}
+
+void remove_unbound_robots(Supervisor &supervisor, const std::string &fleet_path,
+                           const std::string &capabilities_path,
+                           RobotMobility &mobility_by_robot, Bounds3d &water_bounds) {
+  json robots = json::object();
+  json profiles = json::object();
+  json slots = json::object();
+  std::ifstream capabilities_input(capabilities_path);
+  if (capabilities_input) {
+    try {
+      const auto capabilities = json::parse(capabilities_input);
+      profiles = capabilities.value("profiles", json::object());
+      slots = capabilities.value("slots", json::object());
+      const auto regions = capabilities.value("world_regions", json::object());
+      const auto water = regions.value("water", json::object()).value("bounds_m", json::object());
+      if (water.is_object()) {
+        water_bounds = {
+            water.value("min_x", water_bounds.min_x), water.value("max_x", water_bounds.max_x),
+            water.value("min_y", water_bounds.min_y), water.value("max_y", water_bounds.max_y),
+            water.value("min_z", water_bounds.min_z), water.value("max_z", water_bounds.max_z)};
+      }
+    } catch (const json::exception &error) {
+      std::cerr << "[nm_ecology] cannot parse robot capability contract at " << capabilities_path
+                << ": " << error.what() << "; water and mobility defaults will be used\n";
+    }
+  } else {
+    std::cerr << "[nm_ecology] robot capability contract is unavailable at " << capabilities_path
+              << "; water and mobility defaults will be used\n";
+  }
+
+  std::ifstream input(fleet_path);
+  if (input) {
+    try {
+      const auto config = json::parse(input);
+      if (config.is_object()) {
+        const auto configured_robots = config.value("robots", json::object());
+        if (configured_robots.is_object())
+          robots = configured_robots;
+      }
+    } catch (const json::exception &error) {
+      std::cerr << "[nm_ecology] cannot parse fleet config at " << fleet_path
+                << ": " << error.what() << "; unbound slots will be removed\n";
+    }
+  } else {
+    std::cerr << "[nm_ecology] fleet config is unavailable at " << fleet_path
+              << "; unbound slots will be removed\n";
+  }
+
+  Node *root = supervisor.getRoot();
+  Field *children = root ? root->getField("children") : nullptr;
+  if (!children) {
+    std::cerr << "[nm_ecology] cannot inspect world children for fleet pruning\n";
+    return;
+  }
+
+  std::size_t retained = 0;
+  std::size_t removed = 0;
+  for (int index = children->getCount() - 1; index >= 0; --index) {
+    Node *node = children->getMFNode(index);
+    Field *name_field = node ? node->getField("name") : nullptr;
+    if (!name_field)
+      continue;
+    const std::string robot_name = name_field->getSFString();
+    if (robot_name.rfind("AARNN_", 0) != 0)
+      continue;
+
+    const auto binding = robots.find(robot_name);
+    const std::string network_id =
+        binding != robots.end() && binding->is_object()
+            ? binding->value("network_id", std::string{})
+            : std::string{};
+    if (network_id.find_first_not_of(" \t\r\n") == std::string::npos) {
+      std::cout << "[nm_ecology] removing unbound robot slot=" << robot_name << std::endl;
+      node->remove();
+      ++removed;
+    } else {
+      const std::string profile = binding->value("robot_profile", std::string{});
+      const auto profile_config = profiles.find(profile);
+      const auto slot_profile = slots.find(robot_name);
+      const bool profile_matches_slot = slot_profile != slots.end() &&
+          slot_profile->is_string() && slot_profile->get<std::string>() == profile;
+      if (profile_matches_slot && profile_config != profiles.end() && profile_config->is_object()) {
+        mobility_by_robot[robot_name] = nm_webots::mobility_from_string(
+            profile_config->value("mobility", std::string("land")));
+      } else {
+        mobility_by_robot[robot_name] = Mobility::Land;
+        std::cerr << "[nm_ecology] robot profile " << (profile.empty() ? "<missing>" : profile)
+                  << " does not match the shared-world slot " << robot_name
+                  << "; restricting it to shared land\n";
+      }
+      std::cout << "[nm_ecology] bound robot slot=" << robot_name << " profile="
+                << (profile.empty() ? "land" : profile) << " mobility="
+                << nm_webots::mobility_name(mobility_by_robot[robot_name]) << std::endl;
+      ++retained;
+    }
+  }
+  std::cout << "[nm_ecology] fleet physics robots retained=" << retained
+            << " removed_unbound=" << removed << std::endl;
 }
 
 void set_vec3(Field *field, double x, double y, double z) {
@@ -145,6 +254,13 @@ bool save_world_clock(const std::filesystem::path &path, double elapsed) {
 int main() {
   Supervisor supervisor;
   const int step_ms = static_cast<int>(supervisor.getBasicTimeStep());
+  RobotMobility mobility_by_robot;
+  Bounds3d water_bounds{2.82, 7.38, -2.28, 2.28, 0.06, 0.44};
+  remove_unbound_robots(
+      supervisor, env_or("NM_WEBOTS_FLEET_CONFIG", "/etc/neuralmimicry/webots/fleet.json"),
+      env_or("NM_WEBOTS_CAPABILITIES_FILE",
+             "/opt/neuralmimicry/simulation_environment/webots_world/configs/robot_capabilities.json"),
+      mobility_by_robot, water_bounds);
   Node *daylight = supervisor.getFromDef("NM_DAYLIGHT");
   Field *light_intensity = daylight ? daylight->getField("intensity") : nullptr;
   Field *light_color = daylight ? daylight->getField("color") : nullptr;
@@ -164,20 +280,45 @@ int main() {
     tracked[i] = {&kNpcs[i], node->getField("translation"), node->getField("rotation")};
   }
 
+  struct TrackedRobot {
+    Field *translation;
+    Mobility mobility;
+  };
+  std::vector<TrackedRobot> tracked_robots;
+  Node *root = supervisor.getRoot();
+  Field *children = root ? root->getField("children") : nullptr;
+  if (children) {
+    for (int index = 0; index < children->getCount(); ++index) {
+      Node *node = children->getMFNode(index);
+      Field *name_field = node ? node->getField("name") : nullptr;
+      if (!name_field)
+        continue;
+      const auto mobility = mobility_by_robot.find(name_field->getSFString());
+      if (mobility == mobility_by_robot.end())
+        continue;
+      Field *translation = node->getField("translation");
+      if (translation)
+        tracked_robots.push_back({translation, mobility->second});
+    }
+  }
+
   const std::string state_path = env_or("NM_WEBOTS_RUNTIME_WORLD_FILE", "");
   const auto state_file = state_path.empty() ? std::filesystem::path{} : std::filesystem::path(state_path);
   const auto clock_file = state_path.empty() ? std::filesystem::path{} : std::filesystem::path(state_path + ".clock");
   const double elapsed_before_start = load_world_clock(clock_file);
-  auto next_save = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  auto last_save_wall = std::chrono::steady_clock::now();
+  double last_save_world = elapsed_before_start;
+  auto next_save = last_save_wall + std::chrono::seconds(30);
   std::cout << "[nm_ecology] shared ecology supervisor ready; timestep=" << step_ms
             << "ms; state=" << (state_path.empty() ? "disabled" : state_path)
             << "; prior_elapsed=" << elapsed_before_start << "s\n";
 
   while (supervisor.step(step_ms) != -1) {
     const double t = elapsed_before_start + supervisor.getTime();
-    // A complete day-night cycle takes twelve real-time minutes; seasonal light
-    // and flora cycles take four hours. This keeps ecology changes visible while
-    // leaving the shared simulator running at real-time pace.
+    // All robots and ecology use this one world clock. Real-time mode targets
+    // wall-clock pacing; network inference never owns or advances a private clock.
+    // A complete day-night cycle takes twelve world-clock minutes and a seasonal
+    // cycle takes four hours.
     const double day = kTau * t / 720.0;
     const double season = kTau * t / 14400.0;
     if (light_intensity)
@@ -186,6 +327,13 @@ int main() {
       const double warmth = 0.06 * (0.5 + 0.5 * std::sin(season));
       const double color[3]{1.0, 0.91 + warmth, 0.78 + warmth};
       light_color->setSFColor(color);
+    }
+
+    for (const auto &robot : tracked_robots) {
+      const double *current = robot.translation->getSFVec3f();
+      Position position{current[0], current[1], current[2]};
+      if (nm_webots::constrain_position(position, robot.mobility, water_bounds))
+        set_vec3(robot.translation, position.x, position.y, position.z);
     }
 
     for (const auto &entry : tracked) {
@@ -203,9 +351,19 @@ int main() {
       }
     }
 
-    if (!state_file.empty() && std::chrono::steady_clock::now() >= next_save) {
+    const auto save_wall = std::chrono::steady_clock::now();
+    if (!state_file.empty() && save_wall >= next_save) {
       save_snapshot(supervisor, state_file);
       save_world_clock(clock_file, t);
+      const double wall_seconds =
+          std::chrono::duration<double>(save_wall - last_save_wall).count();
+      const double world_seconds = t - last_save_world;
+      const double pace = wall_seconds > 0.0 ? world_seconds / wall_seconds : 0.0;
+      std::cout << "[nm_ecology] world clock pace sim_seconds=" << world_seconds
+                << " wall_seconds=" << wall_seconds << " ratio=" << pace << "x"
+                << std::endl;
+      last_save_wall = save_wall;
+      last_save_world = t;
       next_save = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     }
   }

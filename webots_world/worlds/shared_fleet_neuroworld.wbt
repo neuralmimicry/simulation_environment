@@ -4,17 +4,19 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
 EXTERNPROTO "../protos/CelegansRobot.proto"
+EXTERNPROTO "../protos/DrosophilaBancRobot.proto"
 EXTERNPROTO "../protos/HexapodRobot.proto"
+EXTERNPROTO "../protos/ZebrafishRobot.proto"
 EXTERNPROTO "../protos/NmHabitatOrchard.proto"
+EXTERNPROTO "../protos/NmHabitatRoom.proto"
 EXTERNPROTO "../protos/NmHabitatStream.proto"
 EXTERNPROTO "../protos/NmHabitatTerrain.proto"
 
 WorldInfo {
-  # Slightly larger time step to keep Webots responsive with articulated
-  # multi-robot scenes and clustered controller traffic.
-  basicTimeStep 32
-  # Gravity reduced for zebrafish-only aquarium worlds (buoyancy approximation).
-  gravity 9.8
+  # A fly occupies the scene, so use the collision step needed by its small
+  # articulated body even when other fleet slots are temporarily unbound.
+  basicTimeStep 8
+  gravity 9.81
   contactProperties [
     ContactProperties {
       material1 "default"
@@ -28,10 +30,10 @@ WorldInfo {
   ]
 }
 Viewpoint {
-  fieldOfView 1.12
-  # A broad Z-up view that keeps the agar, orchard, stream and wildlife visible.
-  orientation 1 0 0 1.02
-  position 0 -18 11
+  fieldOfView 0.98
+  # Level, centered overview; Webots local -Z faces the scene with +Y up.
+  orientation 1 0 0 0.827
+  position 0 -21 20
 }
 TexturedBackground {
   texture "noon_cloudy_countryside"
@@ -51,10 +53,6 @@ DEF NM_DAYLIGHT DirectionalLight {
 
 # Shared habitat agar; content 4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8
 Solid { name "nm_agar_substrate" translation 0.000000 0.000000 -0.050625 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.36 0.42 0.26 roughness 0.65 metalness 0  } geometry Box { size 4.050000 4.050000 0.101250 } } ] } ] boundingObject Box { size 4.050000 4.050000 0.101250 } }
-Solid { name "nm_agar_rim_0" translation 0.000000 2.025000 0.121500 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 4.050000 0.050625 0.243000 } } ] } ] boundingObject Box { size 4.050000 0.050625 0.243000 } }
-Solid { name "nm_agar_rim_1" translation 0.000000 -2.025000 0.070875 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 4.050000 0.050625 0.141750 } } ] } ] boundingObject Box { size 4.050000 0.050625 0.141750 } }
-Solid { name "nm_agar_rim_2" translation 2.025000 0.000000 0.121500 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 0.050625 4.050000 0.243000 } } ] } ] boundingObject Box { size 0.050625 4.050000 0.243000 } }
-Solid { name "nm_agar_rim_3" translation -2.025000 0.000000 0.121500 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.42 0.5 0.47 roughness 0.65 metalness 0  } geometry Box { size 0.050625 4.050000 0.243000 } } ] } ] boundingObject Box { size 0.050625 4.050000 0.243000 } }
 Solid { name "nm_agar_grain_00" translation -1.863000 -1.863000 0.006075 rotation 0 0 1 0.000000 children [ Transform { scale 0.030375 0.022275 0.012150 children [ Shape { appearance PBRAppearance { baseColor 0.31679999999999997 0.3696 0.2288 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
 Solid { name "nm_agar_grain_01" translation -0.498030 0.343660 0.006075 rotation 0 0 1 0.000000 children [ Transform { scale 0.030375 0.022275 0.012150 children [ Shape { appearance PBRAppearance { baseColor 0.3312 0.3864 0.23920000000000002 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
 Solid { name "nm_agar_grain_02" translation 0.866941 -1.175680 0.006075 rotation 0 0 1 0.000000 children [ Transform { scale 0.030375 0.022275 0.012150 children [ Shape { appearance PBRAppearance { baseColor 0.34559999999999996 0.40319999999999995 0.2496 roughness 0.65 metalness 0  } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
@@ -190,14 +188,39 @@ Solid {
   children [
     Shape {
       appearance PBRAppearance { baseColor 0.20 0.29 0.17 roughness 0.96 }
-      geometry Box { size 16 12 0.20 }
+      geometry Box { size 20 18 0.20 }
     }
   ]
-  boundingObject Box { size 16 12 0.20 }
+  boundingObject Box { size 20 18 0.20 }
 }
 NmHabitatTerrain { translation 0 4.8 0 scale 2.7 2.2 1 }
 NmHabitatOrchard { translation -5.1 0 0 scale 2.4 2.4 1 }
+NmHabitatRoom { translation 0 -4.8 0 scale 2.2 2.2 1 }
 NmHabitatStream { translation 5.1 0 0 scale 2.4 2.4 1 }
+# Match robot_capabilities.json water bounds. The habitat's translucent Solid
+# remains the visual surface; this world-level Fluid supplies physical
+# buoyancy and drag to ZebrafishRobot's named ImmersionProperties.
+Fluid {
+  name "nm_freshwater"
+  translation 5.1 0 0.25
+  density 1000
+  viscosity 0.001
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.1 0.43 0.61
+        transparency 1
+      }
+      geometry Box { size 4.56 4.56 0.38 }
+    }
+  ]
+  boundingObject Box { size 4.56 4.56 0.38 }
+}
+
+# A low gravel shore at the stream's open southern bank joins the pool to the
+# shared ground. The supervisor keeps swim-only agents in the water region.
+Solid { name "nm_stream_shore_outer_step" translation 5.100000 -2.600000 -0.030000 children [ Shape { appearance PBRAppearance { baseColor 0.46 0.43 0.32 roughness 0.8 } geometry Box { size 2.400000 0.480000 0.060000 } } ] boundingObject Box { size 2.400000 0.480000 0.060000 } }
+Solid { name "nm_stream_shore_inner_step" translation 5.100000 -2.380000 -0.015000 children [ Shape { appearance PBRAppearance { baseColor 0.40 0.40 0.34 roughness 0.8 } geometry Box { size 2.400000 0.384000 0.030000 } } ] boundingObject Box { size 2.400000 0.384000 0.030000 } }
 
 # Persistent wildlife NPCs. The supervisor gives each a deterministic,
 # non-repeating seasonal path and saves their current world transforms.
@@ -266,8 +289,7 @@ CelegansRobot {
   controller "nm_api_robot_controller"
 }
 HexapodRobot { translation 0.62 -1.75 0.190 rotation 0 0 1 3.14159 name "AARNN_NETWORK_HEXAPOD_01" controller "nm_api_robot_controller" }
-HexapodRobot { translation -1.05 1.55 0.190 rotation 0 0 1 0 name "AARNN_NETWORK_SHARED_SNN" controller "nm_api_robot_controller" }
-HexapodRobot { translation 0.10 1.55 0.190 rotation 0 0 1 0 name "AARNN_NETWORK_TENANT" controller "nm_api_robot_controller" }
-CelegansRobot { translation 1.15 1.55 0.032 rotation 0 0 1 0 name "AARNN_SLOT_06" controller "nm_api_robot_controller" }
-CelegansRobot { translation -0.55 2.45 0.032 rotation 0 0 1 0 name "AARNN_SLOT_07" controller "nm_api_robot_controller" }
-CelegansRobot { translation 0.55 2.45 0.032 rotation 0 0 1 0 name "AARNN_SLOT_08" controller "nm_api_robot_controller" }
+HexapodRobot { translation -0.90 4.15 0.190 rotation 0 0 1 0 name "AARNN_NETWORK_SHARED_SNN" controller "nm_api_robot_controller" }
+DrosophilaBancRobot { translation -5.100000 0 0.028 rotation 1 0 0 1.5708 name "AARNN_SLOT_06" controller "nm_api_robot_controller" }
+ZebrafishRobot { translation 5.100000 0 0.140 rotation 0 0 1 0 name "AARNN_SLOT_07" controller "nm_api_robot_controller" }
+CelegansRobot { translation 4.600000 -3.200000 0.032 rotation 0 0 1 0 name "AARNN_SLOT_08" controller "nm_api_robot_controller" }

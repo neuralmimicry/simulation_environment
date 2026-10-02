@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "world_regions": {
+    "land": {
+      "habitats": ["agar", "orchard", "terrain", "room"],
+      "shared_surface": "nm_shared_ecology_ground"
+    },
+    "water": {
+      "habitats": ["stream"],
+      "bounds_m": {
+        "min_x": 2.82,
+        "max_x": 7.38,
+        "min_y": -2.28,
+        "max_y": 2.28,
+        "min_z": 0.06,
+        "max_z": 0.44
+      }
+    },
+    "air": {
+      "over_regions": ["land", "water"]
+    }
+  },
+  "slots": {
+    "AARNN_NETWORK_CELEGANS_01": "celegans",
+    "AARNN_NETWORK_CELEGANS_02": "celegans",
+    "AARNN_NETWORK_HEXAPOD_01": "hexapod",
+    "AARNN_NETWORK_SHARED_SNN": "hexapod",
+    "AARNN_SLOT_06": "drosophila_banc",
+    "AARNN_SLOT_07": "zebrafish",
+    "AARNN_SLOT_08": "celegans"
+  },
+  "profiles": {
+    "celegans": {
+      "mobility": "amphibious",
+      "accessible_regions": ["land", "water"]
+    },
+    "drosophila_banc": {
+      "mobility": "flight",
+      "accessible_regions": ["land", "air"],
+      "overflies_regions": ["land", "water"]
+    },
+    "drosophila_fafb": {
+      "mobility": "flight",
+      "accessible_regions": ["land", "air"],
+      "overflies_regions": ["land", "water"]
+    },
+    "hexapod": {
+      "mobility": "land",
+      "accessible_regions": ["land"]
+    },
+    "nao": {
+      "mobility": "land",
+      "accessible_regions": ["land"]
+    },
+    "zebrafish": {
+      "mobility": "swim_only",
+      "accessible_regions": ["water"]
+    }
+  }
+}

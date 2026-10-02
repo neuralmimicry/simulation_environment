@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 from flask import Flask, Response, abort, current_app, jsonify, redirect, render_template_string, request, session, url_for
@@ -642,6 +642,53 @@ def _identity_can_use_webots(identity: Dict[str, Any]) -> bool:
     return bool(entry.get("can_use") or entry.get("can_control")) or level in {"use", "control"}
 
 
+def _trusted_exchange_origin(
+    origin: str,
+    site_base_url: str,
+    request_host: str,
+    require_https: bool = True,
+) -> bool:
+    parsed = urlparse((origin or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    if require_https and parsed.scheme != "https":
+        return False
+    expected_port = 443 if parsed.scheme == "https" else 80
+    if parsed.port is not None and parsed.port != expected_port:
+        return False
+    trusted_hosts = {
+        value
+        for value in (
+            urlparse(site_base_url).hostname,
+            (request_host or "").split(":", 1)[0],
+        )
+        if value
+    }
+    return parsed.hostname.lower() in {value.lower() for value in trusted_hosts}
+
+
+def _access_exchange_failure(error: str, status: int, details: str = "") -> Response:
+    payload: Dict[str, Any] = {"error": error}
+    if details and request.is_json:
+        payload["details"] = details
+    response = jsonify(payload)
+    response.status_code = status
+
+    origin = request.headers.get("Origin", "").strip()
+    is_browser_form = not request.is_json and request.accept_mimetypes.accept_html
+    if is_browser_form and origin and _trusted_exchange_origin(
+        origin,
+        _settings().site_base_url,
+        request.host,
+        _settings().secure_cookies,
+    ):
+        return redirect(
+            f"{_settings().site_base_url}/webots?{urlencode({'webots_error': error})}",
+            code=303,
+        )
+    return response
+
+
 def _catalog() -> Dict[str, Dict[str, Any]]:
     return current_app.extensions["webots_catalog"]
 
@@ -736,22 +783,50 @@ def _load_catalog(settings: Settings) -> Dict[str, Dict[str, Any]]:
     return catalog
 
 
-def _verify_access_token(access_token: str) -> Dict[str, Any]:
+def _verify_access_token(access_token: str, cookie_header: str = "") -> Dict[str, Any]:
     base = _settings().central_auth_api_base
     if not base:
-        return {"authenticated": False}
-    response = requests.get(
-        f"{base}/api/session",
-        headers={"Authorization": f"Bearer {access_token}"},
-        timeout=_settings().central_auth_timeout_secs,
-    )
+        raise requests.RequestException("central auth API is not configured")
+    headers = {"Accept": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    if cookie_header:
+        # Customers shares its browser-session cookie across neuralmimicry.ai
+        # subdomains. Forward it only to the configured internal auth API so a
+        # valid site session can complete the handoff after a cached bearer
+        # token has expired or been cleared.
+        headers["Cookie"] = cookie_header
+
+    def fetch_session(request_headers: Dict[str, str]) -> requests.Response:
+        response = requests.get(
+            f"{base}/api/session",
+            headers=request_headers,
+            timeout=_settings().central_auth_timeout_secs,
+        )
+        if response.status_code in (408, 425, 429) or response.status_code >= 500:
+            raise requests.HTTPError(
+                f"central auth returned HTTP {response.status_code}", response=response
+            )
+        return response
+
+    response = fetch_session(headers)
+    if response.status_code == 401 and access_token and cookie_header:
+        # An expired cached bearer must not hide a still-valid shared browser
+        # session. Retry that case with the cookie alone; do not retry backend
+        # failures as if they were credential rejection.
+        cookie_only_headers = {
+            key: value for key, value in headers.items() if key != "Authorization"
+        }
+        response = fetch_session(cookie_only_headers)
     if response.status_code >= 400:
         return {"authenticated": False}
     try:
         data = response.json()
-    except ValueError:
-        return {"authenticated": False}
-    return data if isinstance(data, dict) else {"authenticated": False}
+    except ValueError as error:
+        raise requests.RequestException("central auth returned invalid JSON") from error
+    if not isinstance(data, dict):
+        raise requests.RequestException("central auth returned an invalid session payload")
+    return data
 
 
 def create_app(settings: Optional[Settings] = None) -> Flask:
@@ -862,19 +937,28 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
             access_token = str(request.form.get("access_token") or request.values.get("access_token") or "").strip()
             next_path = _safe_next_path(request.form.get("next") or request.values.get("next"))
 
-        if not access_token:
-            return jsonify({"error": "access_token_required"}), 400
+        cookie_header = request.headers.get("Cookie", "").strip()
+        origin = request.headers.get("Origin", "").strip()
+        if not access_token and not cookie_header:
+            return _access_exchange_failure("unauthorized", 401)
+        if (cookie_header or origin) and not _trusted_exchange_origin(
+            origin,
+            settings.site_base_url,
+            request.host,
+            settings.secure_cookies,
+        ):
+            return _access_exchange_failure("untrusted_exchange_origin", 403)
 
         try:
-            identity = _verify_access_token(access_token)
+            identity = _verify_access_token(access_token, cookie_header)
         except requests.RequestException as exc:
-            return jsonify({"error": "auth_unavailable", "details": str(exc)}), 502
+            return _access_exchange_failure("auth_unavailable", 502, str(exc))
 
         if not identity.get("authenticated"):
-            return jsonify({"error": "unauthorized"}), 401
+            return _access_exchange_failure("unauthorized", 401)
 
         if not _identity_can_use_webots(identity):
-            return jsonify({"error": "webots_use_access_required"}), 403
+            return _access_exchange_failure("webots_use_access_required", 403)
 
         session["user"] = str(identity.get("user") or "").strip()
         session["role"] = str(identity.get("role") or "").strip() or None
@@ -890,7 +974,7 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
 
         if request.is_json:
             return jsonify({"status": "ok", "next": next_path, **_session_identity()})
-        return redirect(next_path)
+        return redirect(next_path, code=303)
 
     @app.route("/auth/logout")
     def logout() -> Response:

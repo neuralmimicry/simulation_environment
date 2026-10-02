@@ -9,12 +9,17 @@ simulation_environment_webots_repo_path: "{{ simulation_environment_webots_sourc
 simulation_environment_webots_aarnn_header_path: "{{ simulation_environment_webots_source_root }}/aarnn_rust/include/device_mapper.hpp"
 simulation_environment_webots_local_repo: "{{ lookup('env', 'SIMULATION_ENVIRONMENT_SRC') | default(playbook_dir ~ '/../../', true) | realpath }}"
 simulation_environment_webots_local_aarnn_header: "{{ lookup('env', 'AARNN_RUST_SRC') | default((simulation_environment_webots_local_repo | dirname) ~ '/aarnn_rust', true) | realpath }}/include/device_mapper.hpp"
+simulation_environment_webots_local_aarnn_include_root: "{{ simulation_environment_webots_local_aarnn_header | dirname }}"
+simulation_environment_webots_aarnn_response_headers:
+  - celegans_muscle_response.hpp
+  - simulated_motor_response.hpp
 simulation_environment_webots_home_dir: /usr/local/webots
 simulation_environment_webots_port: 1234
 simulation_environment_webots_state_dir: "{{ simulation_environment_webots_home }}/worlds"
 simulation_environment_webots_state_world: "{{ simulation_environment_webots_state_dir }}/shared_fleet_neuroworld.wbt"
 simulation_environment_webots_config_dir: /etc/neuralmimicry/webots
 simulation_environment_webots_fleet_config: "{{ simulation_environment_webots_config_dir }}/fleet.json"
+simulation_environment_webots_capabilities_file: "{{ simulation_environment_webots_repo_path }}/webots_world/configs/robot_capabilities.json"
 simulation_environment_webots_access_token_file: "{{ simulation_environment_webots_config_dir }}/aarnn_access_token"
 simulation_environment_webots_api_base: https://aarnn.neuralmimicry.ai/api
 simulation_environment_webots_activity_addr: ""
@@ -26,7 +31,6 @@ simulation_environment_webots_network_bindings:
   AARNN_NETWORK_CELEGANS_02: {}
   AARNN_NETWORK_HEXAPOD_01: {}
   AARNN_NETWORK_SHARED_SNN: {}
-  AARNN_NETWORK_TENANT: {}
   AARNN_SLOT_06: {}
   AARNN_SLOT_07: {}
   AARNN_SLOT_08: {}
@@ -48,12 +52,17 @@ simulation_environment_webots_require_network_bindings: false
 simulation_environment_webots_build_controllers: true
 simulation_environment_webots_runtime_service: nm-webots-shared-world.service
 simulation_environment_webots_runtime_script: /usr/local/sbin/nm-webots-shared-world
+simulation_environment_webots_preserve_runtime_viewpoint: false
 simulation_environment_webots_open_gl_vendor: nvidia
 simulation_environment_webots_stream_allowed_sources:
   # Webots is exposed through the authenticated Kubernetes ingress. Restrict
-  # its raw W3D socket to that cluster's ingress/pod networks and local probes.
+  # its raw W3D socket to ingress pods and the Kubernetes node addresses.
+  # K3s SNATs ingress-pod traffic to the node IP before it reaches sm00, so
+  # these addresses must cover every schedulable ingress node.
   - 127.0.0.1/32
   - 192.168.1.2/32
+  - 192.168.1.61/32
+  - 192.168.1.65/32
   - 10.42.0.0/24
   - 10.42.1.0/24
   - 10.42.2.0/24

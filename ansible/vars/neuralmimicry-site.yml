@@ -6,6 +6,8 @@ continuum_tenant_webots_client_user: "pbisaacs"
 continuum_tenant_webots_image: "ghcr.io/neuralmimicry/webots:latest"
 continuum_tenant_webots_build_image: true
 continuum_tenant_webots_use_local_dev_source: true
+# Keep the status credential on the deployment controller for owner preflights
+# and install it on the Webots host through the shared-world role.
 simulation_environment_webots_access_token_file_source: >-
   {{
     lookup('env', 'AARNN_WEBOTS_ACCESS_TOKEN_FILE')
@@ -27,37 +29,20 @@ continuum_tenant_webots_aarnn_app_base: "https://aarnn.neuralmimicry.ai"
 continuum_tenant_webots_central_auth_api_base: "{{ continuum_shared_auth_api_internal_base_url }}"
 continuum_tenant_webots_cookie_domain: ".neuralmimicry.ai"
 continuum_tenant_webots_secure_cookies: true
-continuum_tenant_webots_world_source_base_url: "https://github.com/neuralmimicry/simulation_environment/blob/main"
+continuum_tenant_webots_world_source_base_url: "https://github.com/neuralmimicry/simulation_environment/blob/codex/webots-shared-world-20260929"
 continuum_tenant_webots_cloud_run_base_url: ""
 continuum_tenant_webots_default_world: "shared-fleet"
 continuum_tenant_webots_replicas: 2
 continuum_tenant_webots_hpa_min_replicas: 2
 continuum_tenant_webots_hpa_max_replicas: 8
 
-# These are logical AARNN networks, not worker hosts. Several networks are
-# sharded across the same qc/sm worker fleet; each gets one embodied agent in
-# the shared world and AARNN resolves each network's live distributed placement.
+# These are logical AARNN networks, not worker hosts. The operational shared
+# SNN is represented by one embodied agent in the persistent shared world;
+# AARNN resolves its live distributed placement across qc/sm.
 simulation_environment_webots_network_bindings:
-  AARNN_NETWORK_CELEGANS_01:
-    network_id: celegans_01
-    sensor_regex: '^celegans_s_[0-9]{2}_.*$'
-    actuator_regex: '^celegans_o_[0-9]{3}_.*$'
-    expected_sensory: 24
-    expected_outputs: 96
-  AARNN_NETWORK_CELEGANS_02:
-    network_id: celegans_02
-    sensor_regex: '^celegans_s_[0-9]{2}_.*$'
-    actuator_regex: '^celegans_o_[0-9]{3}_.*$'
-    expected_sensory: 24
-    expected_outputs: 96
-  AARNN_NETWORK_HEXAPOD_01:
-    network_id: hexapod_01
-    sensor_regex: '^hex_s_[0-9]{2}_.*$'
-    actuator_regex: '^hex_o_[0-9]{3}_.*$'
-    expected_sensory: 34
-    expected_outputs: 18
   AARNN_NETWORK_SHARED_SNN:
     network_id: neuralmimicry-shared-snn
+    robot_profile: hexapod
     # The AARNN shared SNN uses the generic 32/16 profile. Reuse the existing
     # Hexapod body, excluding its 1x1 event camera (two channels) from inputs
     # and using the first 16 of its 18 motors.
@@ -65,14 +50,42 @@ simulation_environment_webots_network_bindings:
     actuator_regex: '^hex_o_(00[0-9]|01[0-5])_.*$'
     expected_sensory: 32
     expected_outputs: 16
-  AARNN_NETWORK_TENANT:
-    network_id: tenant-aarnn
-    sensor_regex: '^hex_s_(0[0-9]|1[0-9]|2[0-5]|27|28)_.*$'
-    actuator_regex: '^hex_o_(00[0-9]|01[0-5])_.*$'
-    expected_sensory: 32
-    expected_outputs: 16
 
-# Address the live AARNN worker directly for both sensory injection and
-# activity reads; the public infer route performs discovery and waits for
-# output on each Webots frame.
-simulation_environment_webots_activity_addr: "192.168.1.62:50051"
+# Let the AARNN API resolve a live activity source from current placement.
+# Fixed worker addresses can point at a backup shard or become stale after a
+# placement change. Sensory injection always goes through the orchestrator.
+simulation_environment_webots_activity_addr: ""
+
+# The AARNN Webots service account receives sensory-input rights only for the
+# networks embodied in this shared scene. Removing a principal/network pair
+# and rolling aarnn-web-ui revokes that peripheral grant.
+simulation_environment_webots_peripheral_input_grants:
+  - principal: webots
+    brain_id: neuralmimicry-shared-snn
+simulation_environment_webots_simulation_ingress_principals:
+  - webots
+
+simulation_environment_webots_aarnn_namespace: aarnn
+simulation_environment_webots_aarnn_bearer_secret: nm-webots-sensory-ingress
+simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn_orchestrator_bearer
+# The shared 2k-neuron SNN plus live I/O retries exceeded the base AARNN
+# orchestrator's 16 GiB limit and triggered repeated OOM restarts. Reserve
+# realistic headroom for this Webots-backed workload on qc01.
+simulation_environment_webots_aarnn_orchestrator_memory_request: 14Gi
+simulation_environment_webots_aarnn_orchestrator_memory_limit: 24Gi
+simulation_environment_webots_aarnn_orchestrator_threads: 2
+# Align persisted simulator-network snapshots against the deployed embodiment
+# dimensions before the orchestrator distributes them. This is the same
+# read-only startup contract mounted for the default AARNN network.
+simulation_environment_webots_aarnn_startup_io_contract_path: /etc/aarnn/startup/default-network.json
+simulation_environment_webots_aarnn_startup_io_contract_network_ids:
+  - neuralmimicry-shared-snn
+simulation_environment_aarnn_orchestrator_addr: "http://192.168.1.61:50051"
+simulation_environment_aarnn_node_io_config_path: /etc/aarnn/shared-snn-network.json
+simulation_environment_aarnn_node_service_dropin: /etc/systemd/system/aarnn-node.service.d/20-shared-snn-io.conf
+# Pin the orchestrator and engine node to the same tested build so their
+# acknowledged, idempotent network-load handoff stays compatible.
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:1afb7863abd608c5cb74ac852c13a5611b4d0d8a-orchestrator-arm64-64k-hwe"
+# The engine DaemonSet supplies the node command and args to this image.
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:1afb7863abd608c5cb74ac852c13a5611b4d0d8a-node-arm64-64k-hwe"
+simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:371b43e236734fc065c6fee298745bcaddc1d8fb-web-ui-arm64-64k-hwe"
