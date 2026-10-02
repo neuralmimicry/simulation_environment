@@ -32,8 +32,8 @@ WorldInfo {
 }
 Viewpoint {
   fieldOfView 0.98
-  # Level overview centered on the shared habitats, with the south edge nearest.
-  orientation -0.344286 0.344286 0.873461 1.705677
+  # Level, centered overview; Webots local -Z faces the scene with +Y up.
+  orientation 1 0 0 0.827
   position 0 -21 20
 }
 TexturedBackground {

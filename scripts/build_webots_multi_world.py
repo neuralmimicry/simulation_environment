@@ -760,9 +760,9 @@ def viewpoint_orientation(
     """
     Build a level Webots `Viewpoint.orientation` value from an eye/target pair.
 
-    Webots uses a `Viewpoint` basis with +X as the forward direction and +Z as
-    the camera-up direction. We therefore solve a look-at rotation in that frame
-    so the generated room remains level in Webots' Z-up world.
+    Webots Viewpoints look along local -Z with local +Y as camera-up. Solve the
+    look-at rotation in that basis so the generated room remains level in the
+    world's Z-up coordinate system.
     """
     forward_x, forward_y, forward_z = normalize3(
         target_x - eye_x,
@@ -772,18 +772,33 @@ def viewpoint_orientation(
     if abs(forward_x) + abs(forward_y) + abs(forward_z) <= 1e-9:
         return 0.0, 0.0, 1.0, 0.0
 
-    up_x, up_y, up_z = 0.0, 0.0, 1.0
+    world_up_x, world_up_y, world_up_z = 0.0, 0.0, 1.0
     if abs(forward_z) >= 0.999:
-        up_x, up_y, up_z = 0.0, 1.0, 0.0
+        world_up_x, world_up_y, world_up_z = 0.0, 1.0, 0.0
 
-    left_x, left_y, left_z = normalize3(
-        *cross3(up_x, up_y, up_z, forward_x, forward_y, forward_z)
+    right_x, right_y, right_z = normalize3(
+        *cross3(
+            forward_x,
+            forward_y,
+            forward_z,
+            world_up_x,
+            world_up_y,
+            world_up_z,
+        )
     )
-    up_x, up_y, up_z = cross3(forward_x, forward_y, forward_z, left_x, left_y, left_z)
+    camera_up_x, camera_up_y, camera_up_z = cross3(
+        right_x,
+        right_y,
+        right_z,
+        forward_x,
+        forward_y,
+        forward_z,
+    )
+    backward_x, backward_y, backward_z = -forward_x, -forward_y, -forward_z
     matrix = (
-        (forward_x, left_x, up_x),
-        (forward_y, left_y, up_y),
-        (forward_z, left_z, up_z),
+        (right_x, camera_up_x, backward_x),
+        (right_y, camera_up_y, backward_y),
+        (right_z, camera_up_z, backward_z),
     )
     return rotation_matrix_to_axis_angle(matrix)
 
@@ -2628,7 +2643,7 @@ WorldInfo {{
 }}
 Viewpoint {{
   fieldOfView {cam_fov:.2f}
-  # Zero-roll camera solved from eye->scene-center with world +Z as "up".
+  # Zero-roll Viewpoint rotation: local -Z faces the scene, local +Y stays up.
   orientation {cam_axis_x:.6f} {cam_axis_y:.6f} {cam_axis_z:.6f} {cam_angle:.6f}
   position {cam_x:.2f} {cam_y:.2f} {cam_z:.2f}
 }}
