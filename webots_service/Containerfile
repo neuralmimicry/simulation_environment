@@ -25,6 +25,11 @@ ARG TARGET_PAGE_SIZE
 ARG BUILD_NUMBER=0
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.title="NeuralMimicry Webots Broker" \
+      org.opencontainers.image.source="https://github.com/neuralmimicry/simulation_environment" \
+      org.opencontainers.image.url="https://github.com/neuralmimicry/simulation_environment" \
+      org.opencontainers.image.description="NeuralMimicry Webots broker service for AARNN robot simulation" \
+      org.opencontainers.image.vendor="NeuralMimicry" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${BUILD_NUMBER}" \
       org.opencontainers.image.revision="${GIT_COMMIT}" \
       org.opencontainers.image.page-size="${TARGET_PAGE_SIZE}"
