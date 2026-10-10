@@ -65,14 +65,10 @@
   tasks:
     - name: Read active shared-SNN owners and sensory ingress owner
       ansible.builtin.shell: |
-        set -eu
-        header_file="$(mktemp)"
-        trap 'rm -f "$header_file"' EXIT
-        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
-        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
-          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+        set -euo pipefail
+        nmc aarnn proxy runtime --path /api/status -x json \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
-              [.networks[] | select(.network_id == $network_id)] as $matches
+              [.data.payload.networks[] | select(.network_id == $network_id)] as $matches
               | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
                 else
                   ($matches[0].distribution // []) as $distribution
@@ -91,6 +87,10 @@
               '
       args:
         executable: /bin/bash
+      delegate_to: "{{ simulation_environment_webots_continuum_host }}"
+      become: false
+      vars:
+        ansible_connection: ssh
       register: simulation_environment_shared_snn_placement
       changed_when: false
       check_mode: false
@@ -131,6 +131,14 @@
              + simulation_environment_shared_snn_ingress_worker_hosts }}
       tags: [rollout_order_preflight]
 
+    - name: Report the live shared-SNN placement and worker rollout order
+      ansible.builtin.debug:
+        msg: >-
+          active={{ simulation_environment_shared_snn_active_worker_hosts | sort }};
+          sensory_owner={{ (simulation_environment_shared_snn_placement.stdout | from_json).sensory_ingress_node_ids }};
+          order={{ simulation_environment_aarnn_worker_rollout_order }}
+      tags: [rollout_order_preflight]
+
     - name: Refuse a worker rollout unless it preserves the active shared-SNN ingress owner
       ansible.builtin.assert:
         that:
@@ -169,8 +177,9 @@
       tags: [rollout_order_preflight]
 
 - name: Roll out the Webots sensory-ingress RPCs to active AARNN workers
-  # qc00 is offline and qc05 has no active native worker service. qc01's engine
-  # DaemonSet is updated with the ingress images instead of this native play.
+  # qc00 is included because it is active in the current shared-SNN placement;
+  # qc05 has no native worker service. qc01's engine DaemonSet is updated with
+  # the ingress image by the tenant workload deployment, not this native play.
   # The preceding play builds this group from live placement, putting the
   # current managed layer-0 ingress owner last immediately before the rollout.
   hosts: aarnn_sensory_workers_rollout
@@ -216,14 +225,10 @@
 
     - name: Recheck the shared-SNN ingress owner before this serial worker update
       ansible.builtin.shell: |
-        set -eu
-        header_file="$(mktemp)"
-        trap 'rm -f "$header_file"' EXIT
-        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
-        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
-          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+        set -euo pipefail
+        nmc aarnn proxy runtime --path /api/status -x json \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
-              [.networks[] | select(.network_id == $network_id)] as $matches
+              [.data.payload.networks[] | select(.network_id == $network_id)] as $matches
               | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
                 else
                   ($matches[0].distribution // []) as $distribution
@@ -241,8 +246,10 @@
               '
       args:
         executable: /bin/bash
-      delegate_to: localhost
+      delegate_to: "{{ simulation_environment_webots_continuum_host }}"
       become: false
+      vars:
+        ansible_connection: ssh
       register: simulation_environment_aarnn_current_shared_snn_placement
       changed_when: false
       check_mode: false
@@ -290,7 +297,8 @@
           - simulation_environment_aarnn_node_binary_source_aarch64 | length > 0
         fail_msg: >-
           Set AARNN_NODE_BINARY_X86_64 and AARNN_NODE_BINARY_AARCH64 to release
-          aarnn_rust executables built from codex/webots-api-ingress-20260929.
+          aarnn_rust v0.1.38 executables from source commit
+          f0bdf31fe7040ef807c25c7b8ce1fa3e01c86a17.
       run_once: true
 
     - name: Inspect the local x86-64 worker binary
@@ -658,14 +666,10 @@
 
     - name: Confirm the shared SNN is still active before proceeding to the next worker
       ansible.builtin.shell: |
-        set -eu
-        header_file="$(mktemp)"
-        trap 'rm -f "$header_file"' EXIT
-        printf 'Authorization: Bearer %s\n' "$(cat {{ simulation_environment_webots_access_token_file_source | quote }})" > "$header_file"
-        curl --fail --silent --show-error --connect-timeout 5 --max-time 15 --header "@${header_file}" \
-          "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status" \
+        set -euo pipefail
+        nmc aarnn proxy runtime --path /api/status -x json \
           | jq -ce --arg network_id "{{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN']['network_id'] }}" '
-              [.networks[] | select(.network_id == $network_id)] as $matches
+              [.data.payload.networks[] | select(.network_id == $network_id)] as $matches
               | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
                 elif ($matches[0].playing != true
                       or ($matches[0].total_neurons // 0) < 1
@@ -683,8 +687,10 @@
               '
       args:
         executable: /bin/bash
-      delegate_to: localhost
+      delegate_to: "{{ simulation_environment_webots_continuum_host }}"
       become: false
+      vars:
+        ansible_connection: ssh
       register: simulation_environment_shared_snn_post_restart_status
       changed_when: false
       until: simulation_environment_shared_snn_post_restart_status.rc == 0

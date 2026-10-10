@@ -13,6 +13,8 @@ EXTERNPROTO "../protos/NmHabitatStream.proto"
 EXTERNPROTO "../protos/NmHabitatTerrain.proto"
 
 WorldInfo {
+  # Habitat geometry uses X/Y as the ground plane and Z as vertical.
+  coordinateSystem "ENU"
   # A fly occupies the scene, so use the collision step needed by its small
   # articulated body even when other fleet slots are temporarily unbound.
   basicTimeStep 8
@@ -31,9 +33,11 @@ WorldInfo {
 }
 Viewpoint {
   fieldOfView 0.98
-  # Level, centered overview; Webots local -Z faces the scene with +Y up.
-  orientation 1 0 0 0.827
-  position 0 -21 20
+  # Face the shared habitat from the south and keep world +Z vertical.
+  # The streamed camera looks along local +X and uses local +Z as screen-up.
+  # Solve that basis for the target so the habitat and horizon stay upright.
+  orientation -0.266872 0.266872 0.926045 1.647553
+  position 0 -14 9.5
 }
 TexturedBackground {
   texture "noon_cloudy_countryside"
