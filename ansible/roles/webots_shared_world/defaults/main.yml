@@ -1,6 +1,7 @@
 ---
 simulation_environment_webots_enabled: true
 simulation_environment_webots_primary_host: sm00
+simulation_environment_webots_continuum_host: spirit
 simulation_environment_webots_package_name: webots
 simulation_environment_webots_home: /var/lib/neuralmimicry/webots
 simulation_environment_webots_service_user: webots

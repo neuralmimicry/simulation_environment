@@ -472,6 +472,8 @@ STREAM_VIEWER_TEMPLATE = """
       html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #101820; color: #f4f1e9; font: 15px system-ui, sans-serif; }
       .bar { height: 52px; display: flex; align-items: center; gap: 18px; padding: 0 18px; background: #172130; }
       .bar strong { letter-spacing: .08em; text-transform: uppercase; font-size: 12px; }
+      .bar button { border: 1px solid rgba(244,241,233,.35); border-radius: 999px; padding: 6px 12px; background: transparent; color: #f4f1e9; font: inherit; cursor: pointer; }
+      .bar button:hover { background: rgba(244,241,233,.12); }
       .bar a { color: #f2a078; margin-left: auto; }
       #status { color: #a9d5b0; }
       webots-view { display: block; width: 100%; height: calc(100% - 52px); }
@@ -483,6 +485,7 @@ STREAM_VIEWER_TEMPLATE = """
     <header class="bar">
       <strong>NeuralMimicry · Shared Ecology</strong>
       <span id="status">Connecting to the persistent world…</span>
+      <button id="reset-view" type="button" aria-label="Reset camera view">Reset view</button>
       <a href="{{ site_base_url }}/webots">Back to NeuralMimicry</a>
     </header>
     <webots-view></webots-view>
@@ -490,11 +493,15 @@ STREAM_VIEWER_TEMPLATE = """
       await customElements.whenDefined('webots-view');
       const viewer = document.querySelector('webots-view');
       const status = document.getElementById('status');
+      document.getElementById('reset-view').addEventListener('click', () => viewer.resetViewpoint());
       const streamUrl = {{ stream_url | tojson }};
       const mobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
       viewer.showWorldSelection = false;
       viewer.showIde = false;
-      viewer.onready = () => { status.textContent = 'Connected · shared simulation continues when you leave'; };
+      viewer.onready = () => {
+        viewer.resetViewpoint();
+        status.textContent = 'Connected · shared simulation continues when you leave';
+      };
       viewer.ondisconnect = () => { status.textContent = 'Disconnected · the shared simulation is still running'; };
       viewer.connect(streamUrl, 'w3d', false, mobile, -1);
     </script>

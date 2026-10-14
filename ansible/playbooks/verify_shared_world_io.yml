@@ -10,36 +10,39 @@
     simulation_environment_webots_verify_snn_id: >-
       {{ simulation_environment_webots_network_bindings['AARNN_NETWORK_SHARED_SNN'].network_id }}
   tasks:
-    - name: Require the Webots AARNN API token for live sensory verification
-      ansible.builtin.assert:
-        that:
-          - simulation_environment_webots_access_token | length > 0
-        fail_msg: The AARNN Webots API token is required for live shared-SNN verification.
+    - name: Read live shared-SNN placement from the AARNN API
+      ansible.builtin.shell: |
+        set -euo pipefail
+        nmc aarnn proxy runtime --path /api/status -x json \
+          | jq -ce --arg network_id "{{ simulation_environment_webots_verify_snn_id }}" '
+              [.data.payload.networks[] | select(.network_id == $network_id)] as $matches
+              | if ($matches | length) != 1 then error("shared-SNN status missing or ambiguous")
+                else
+                  ($matches[0] // {})
+                  | .distribution = (.distribution // [])
+                  | .
+                end
+              '
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ simulation_environment_webots_continuum_host }}"
+      become: false
+      vars:
+        ansible_connection: ssh
+      register: simulation_environment_webots_verify_live_status
+      changed_when: false
       no_log: true
 
-    - name: Read live shared-SNN placement from the AARNN API
-      ansible.builtin.uri:
-        url: "{{ simulation_environment_webots_api_base | regex_replace('/+$', '') }}/status"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ simulation_environment_webots_access_token }}"
-        return_content: true
-        status_code: 200
-        timeout: 30
-      register: simulation_environment_webots_verify_live_status
-      no_log: true
+    - name: Derive the live shared-SNN status facts
+      ansible.builtin.set_fact:
+        simulation_environment_webots_verify_live_network: >-
+          {{ simulation_environment_webots_verify_live_status.stdout | from_json }}
 
     - name: Require one playing shared-SNN network in the AARNN status
       ansible.builtin.assert:
         that:
-          - >-
-            (simulation_environment_webots_verify_live_status.json.networks
-             | selectattr('network_id', 'equalto', simulation_environment_webots_verify_snn_id)
-             | list | length) == 1
-          - >-
-            (simulation_environment_webots_verify_live_status.json.networks
-             | selectattr('network_id', 'equalto', simulation_environment_webots_verify_snn_id)
-             | first).playing | bool
+          - simulation_environment_webots_verify_live_network.playing | bool
+          - simulation_environment_webots_verify_live_network.total_neurons | int > 0
         fail_msg: >-
           The shared-SNN network is missing or paused; sensory-consumption checks
           cannot proceed.
@@ -53,9 +56,7 @@
         simulation_environment_webots_verify_sensory_owner_ids: >-
           {{ simulation_environment_webots_verify_sensory_owner_ids + [item.node_id] }}
       loop: >-
-        {{ (simulation_environment_webots_verify_live_status.json.networks
-            | selectattr('network_id', 'equalto', simulation_environment_webots_verify_snn_id)
-            | first).distribution | default([]) }}
+        {{ simulation_environment_webots_verify_live_network.distribution | default([]) }}
       when: 0 in (item.layers | default([]))
       loop_control:
         label: "{{ item.node_id }}"

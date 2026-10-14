@@ -3,11 +3,12 @@
 # implementation so a normal Ansible deployment selects the persistent
 # shared fleet world and links back to this repository.
 continuum_tenant_webots_client_user: "pbisaacs"
-continuum_tenant_webots_image: "ghcr.io/neuralmimicry/webots:latest"
-continuum_tenant_webots_build_image: true
-continuum_tenant_webots_use_local_dev_source: true
-# Keep the status credential on the deployment controller for owner preflights
-# and install it on the Webots host through the shared-world role.
+continuum_tenant_webots_image: "ghcr.io/neuralmimicry/webots@sha256:9dae588063b4182c96cac71dcc2a958e9f50a3128406a57012ea2e209006a45d"
+continuum_tenant_webots_build_image: false
+continuum_tenant_webots_push_image: false
+continuum_tenant_webots_use_local_dev_source: false
+# Keep the AARNN credential on the deployment controller for the Webots service;
+# operational status reads use Continuum on Spirit instead.
 simulation_environment_webots_access_token_file_source: >-
   {{
     lookup('env', 'AARNN_WEBOTS_ACCESS_TOKEN_FILE')
@@ -68,11 +69,11 @@ simulation_environment_webots_simulation_ingress_principals:
 simulation_environment_webots_aarnn_namespace: aarnn
 simulation_environment_webots_aarnn_bearer_secret: nm-webots-sensory-ingress
 simulation_environment_webots_aarnn_bearer_file: /etc/neuralmimicry/webots/aarnn_orchestrator_bearer
-# The shared 2k-neuron SNN plus live I/O retries exceeded the base AARNN
-# orchestrator's 16 GiB limit and triggered repeated OOM restarts. Reserve
-# realistic headroom for this Webots-backed workload on qc01.
-simulation_environment_webots_aarnn_orchestrator_memory_request: 14Gi
-simulation_environment_webots_aarnn_orchestrator_memory_limit: 24Gi
+# The shared SNN plus live I/O previously exceeded the 24 GiB limit and
+# triggered repeated OOM restarts on qc01. The singleton now runs on qc05 with
+# a 24 GiB request and 32 GiB limit, with room for the Webots bridge workload.
+simulation_environment_webots_aarnn_orchestrator_memory_request: 24Gi
+simulation_environment_webots_aarnn_orchestrator_memory_limit: 32Gi
 simulation_environment_webots_aarnn_orchestrator_threads: 2
 # Align persisted simulator-network snapshots against the deployed embodiment
 # dimensions before the orchestrator distributes them. This is the same
@@ -80,12 +81,11 @@ simulation_environment_webots_aarnn_orchestrator_threads: 2
 simulation_environment_webots_aarnn_startup_io_contract_path: /etc/aarnn/startup/default-network.json
 simulation_environment_webots_aarnn_startup_io_contract_network_ids:
   - neuralmimicry-shared-snn
-simulation_environment_aarnn_orchestrator_addr: "http://192.168.1.61:50051"
+simulation_environment_aarnn_orchestrator_addr: "http://192.168.1.65:50051"
 simulation_environment_aarnn_node_io_config_path: /etc/aarnn/shared-snn-network.json
 simulation_environment_aarnn_node_service_dropin: /etc/systemd/system/aarnn-node.service.d/20-shared-snn-io.conf
-# Pin the orchestrator and engine node to the same tested build so their
-# acknowledged, idempotent network-load handoff stays compatible.
-simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust:1afb7863abd608c5cb74ac852c13a5611b4d0d8a-orchestrator-arm64-64k-hwe"
-# The engine DaemonSet supplies the node command and args to this image.
-simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust:1afb7863abd608c5cb74ac852c13a5611b4d0d8a-node-arm64-64k-hwe"
-simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust:371b43e236734fc065c6fee298745bcaddc1d8fb-web-ui-arm64-64k-hwe"
+# Keep the Webots bridge and orchestrator on the same v0.1.38 shared-runtime
+# image; the web UI/control API use the matching v0.1.38 web image.
+simulation_environment_webots_aarnn_orchestrator_image: "ghcr.io/neuralmimicry/aarnn_rust@sha256:94b7d6b4b4824f8f68460c87c3f2f7edebcf2ddc2af28b9fe2b683b8775b559a"
+simulation_environment_webots_aarnn_engine_image: "ghcr.io/neuralmimicry/aarnn_rust@sha256:94b7d6b4b4824f8f68460c87c3f2f7edebcf2ddc2af28b9fe2b683b8775b559a"
+simulation_environment_webots_aarnn_web_ui_image: "ghcr.io/neuralmimicry/aarnn_rust@sha256:40750c14e2a0cb0117fc6403289995ccf02ae2cf860f9d08c6d81b2608aacd2d"
